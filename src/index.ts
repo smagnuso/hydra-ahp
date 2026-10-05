@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { startApp } from "./app.js";
 import { runTokenCommand } from "./commands/tokens.js";
 import { DEFAULT_PORT, loadConfig, tokensPath } from "./config.js";
@@ -7,7 +8,7 @@ import { logger } from "./util/log.js";
 
 const log = logger("main");
 
-const VERSION = "0.1.0";
+const { version: VERSION } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
 function runCli(argv: string[]): void {
   const tokens = new TokenRegistry({ path: tokensPath(process.env) });
