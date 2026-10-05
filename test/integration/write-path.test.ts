@@ -166,7 +166,8 @@ describe("write path against a scratch daemon", () => {
       const row = await daemon.admin.getSession(view.id).catch(() => undefined);
       throw new Error(
         `${err.message}; held=${driver.held.length} permissions=${driver.permissions.length} busy=${String(row?.busy)} ` +
-          `attached=${String(row?.attachedClients)} agent said=${JSON.stringify(driver.textSince(view.id, updatesBefore))}`,
+          `attached=${String(row?.attachedClients)} agent said=${JSON.stringify(driver.textSince(view.id, updatesBefore))}\n` +
+          `row=${JSON.stringify(row)}\n${daemon.logLines(view.id)}`,
       );
     });
     // Anything but -32601 from the extension would already have settled the race.

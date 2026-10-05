@@ -98,6 +98,7 @@ export class ScratchDaemon {
           HYDRA_AHP_PORT: String(ahpPort),
           HYDRA_AHP_POLL_MS: "300",
           HYDRA_AHP_WARM_POLL_MS: "200",
+          HYDRA_AHP_LOG_LEVEL: "debug",
           ...options.ahpEnv,
         },
       };
@@ -185,6 +186,19 @@ export class ScratchDaemon {
         child.kill("SIGKILL");
       }
     }
+  }
+
+  // The daemon's and the extension's log lines that mention a string, for explaining a failure on a CI runner.
+  logLines(match: string, limit = 80): string {
+    const files = [join(this.home, "current.log"), join(this.home, "extensions", "ahp", "current.log")];
+    const lines = files.flatMap((file) => {
+      try {
+        return readFileSync(file, "utf8").split("\n").filter((line) => line.includes(match)).map((line) => `${file.includes("extensions") ? "ahp" : "hydra"}: ${line}`);
+      } catch {
+        return [];
+      }
+    });
+    return lines.slice(-limit).join("\n");
   }
 
   async destroy(): Promise<void> {
