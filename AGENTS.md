@@ -160,10 +160,24 @@ elides the `hydra-` prefix, so slash commands are `/hydra ahp <verb>`.
   /v1/sessions/:id/kill`) the chat's Hydra session when it is live and idle,
   even with other clients attached (any of them can warm it again); a busy
   session keeps running.
+- **Done marks carry `archivedAt`**: a turn starting after it, from any
+  client, clears the mark so the session reappears. The catalog checks
+  `turnStartedAt` on every poll and an attached bridge checks the turns it
+  maps; resuming or viewing a session leaves it done. Marks from before the
+  timestamp have none, so any later turn clears them.
 - **Edit content is in memory only**: transcript `fileEdit` before/after
   bodies are registered as `<chat>/edit/...` URIs while a chat is mapped
   (`EditContentStore`, 32 MB, oldest out). After a restart they exist again
   once the chat is replayed; a read before that is not found.
+- **Tool titles change after the call opens**: agents open a call with a
+  placeholder ("Preparing file…") and name it in later updates, so the
+  mapper refreshes `displayName` on every update. A confirmation carries the
+  pending edits (`edits` on `toolCallReady`) so VS Code shows the diff before
+  approval.
+- **opencode's `apply_patch` has no diff blocks**: each file's unified diff
+  is in `rawOutput.metadata.files[]`, unfolded by `src/bridge/patch.ts` into
+  hunk-only before and after text (a copy of the daemon's and the browser's
+  `parseUnifiedPatch`).
 - **Hydra snapshots extension config at boot**: changing an extension's
   `env` needs `extension remove` + `add --env` then `start` (or a daemon
   restart); `extension restart` keeps the old env.
