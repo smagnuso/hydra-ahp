@@ -68,6 +68,8 @@ export class TerminalService {
   private spawn: Spawn | undefined;
   private readonly terminals = new Map<string, Running>();
   private readonly orphanTimers = new Map<string, NodeJS.Timeout>();
+  // Stand-ins for terminals this process never had, such as ones from before a restart.
+  private readonly gone = new Set<string>();
 
   constructor(private readonly options: TerminalServiceOptions = {}) {}
 
@@ -221,6 +223,37 @@ export class TerminalService {
     });
     this.publishList();
     log.info(`started ${shell} in ${cwd} for ${client.clientId}`);
+  }
+
+  // A client still holding a terminal from before a restart gets a stand-in that exits at once, so it closes the tab
+  // instead of typing into nothing.
+  attachGone(channel: string): void {
+    if (!isTerminalUri(channel) || this.terminals.has(channel) || this.core.store.has(channel)) {
+      return;
+    }
+    this.gone.add(channel);
+    this.core.createChannel(channel, {
+      title: "Terminal",
+      cwd: cwdToUri(homedir()),
+      cols: 80,
+      rows: 24,
+      content: [],
+      lifecycle: { status: "running" },
+      claim: { kind: "client", clientId: "" },
+      supportsCommandDetection: false,
+      isPty: true,
+    } as TerminalState);
+    setImmediate(() => {
+      if (this.gone.has(channel) && this.core.store.has(channel)) {
+        this.core.publish(channel, action({ type: "terminal/exited" }));
+      }
+    });
+  }
+
+  detachGone(channel: string): void {
+    if (this.gone.delete(channel)) {
+      this.core.removeChannel(channel);
+    }
   }
 
   private dispose(channel: string): void {

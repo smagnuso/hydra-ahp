@@ -64,6 +64,18 @@ describe("terminals", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("ends a terminal from before a restart as soon as a client asks for it", async () => {
+    harness = await startBridgeHarness();
+    const session = await connected(true);
+    const stale = "agenthost-terminal:/from-before";
+    await session.client.subscribe(stale);
+    const exited = await session.waitFor((e) => e.channel === stale && e.action.type === "terminal/exited", 2000);
+    expect(exited.action.type).toBe("terminal/exited");
+    expect((harness.core.store.state(stale) as TerminalState).lifecycle.status).toBe("exited");
+    const root = harness.core.store.state("ahp-root://") as RootState;
+    expect(root.terminals ?? []).toEqual([]);
+  });
+
   it("refuses terminals to a token below full", async () => {
     harness = await startBridgeHarness();
     const session = await connected(false);

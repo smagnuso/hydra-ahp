@@ -215,6 +215,10 @@ export class HydraBackend implements Backend {
 
   // A session channel is a view of the catalog row; the chat channel is built by the bridge from Hydra's history.
   async attach(uri: string): Promise<void> {
+    if (isTerminalUri(uri)) {
+      this.terminals?.attachGone(uri);
+      return;
+    }
     if (isChangesetChannelUri(uri)) {
       this.changesets?.attach(uri);
       return;
@@ -244,6 +248,10 @@ export class HydraBackend implements Backend {
   }
 
   async detach(uri: string): Promise<void> {
+    if (isTerminalUri(uri)) {
+      this.terminals?.detachGone(uri);
+      return;
+    }
     if (isChangesetChannelUri(uri)) {
       this.changesets?.detach(uri);
       return;
