@@ -19,8 +19,10 @@ hydra-acp extension add ahp --command hydra-ahp
 hydra-acp extension restart ahp
 ```
 
-The extension name must be `ahp`: Hydra's slash commands are
-`/hydra <extension name> <verb>`, so the name gives you `/hydra ahp token mint`.
+Hydra's slash commands are `/hydra <extension name> <verb>`, so the name `ahp`
+gives you `/hydra ahp token mint`. Registering it as `hydra-ahp` works the same
+way (Hydra elides the `hydra-` prefix) and also lets `hydra-acp ahp ...` find the
+`hydra-ahp` binary; that needs a Hydra with prefix elision for `hydra-` names.
 The equivalent `config.json` entry:
 
 ```json
