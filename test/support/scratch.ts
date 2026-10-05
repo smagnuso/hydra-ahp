@@ -141,6 +141,8 @@ export class ScratchDaemon {
 
   async start(): Promise<void> {
     mkdirSync(this.home, { recursive: true });
+    const served = () => this.logLines("serving AHP on", Infinity).split("\n").filter(Boolean).length;
+    const servedBefore = served();
     this.child = spawn("node", [DAEMON_JS], {
       env: { ...process.env, HYDRA_ACP_HOME: this.home },
       stdio: ["ignore", "ignore", "ignore"],
@@ -150,9 +152,10 @@ export class ScratchDaemon {
       return response?.ok ? true : undefined;
     });
     if (this.options.ahp !== false) {
+      // The extension listens before it registers its /hydra verbs, and logs this line only once both are done.
       await until("ahp extension", async () => {
         const info = await this.admin.request<{ status: string }>("GET", "/v1/extensions/ahp").catch(() => undefined);
-        return info?.status === "running" && (await this.ahpListening()) ? true : undefined;
+        return info?.status === "running" && (await this.ahpListening()) && served() > servedBefore ? true : undefined;
       });
     }
   }
