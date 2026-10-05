@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@microsoft/agent-host-protocol";
 import { openSession } from "../support/harness.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
-import { ScratchDaemon, until, WORK_DIR, WORK_URI } from "../support/scratch.js";
+import { ScratchDaemon, sleep, until, WORK_DIR, WORK_URI } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 async function list(ahp: AhpConnection, params: Record<string, unknown> = {}) {
@@ -80,6 +80,15 @@ describe("one scratch daemon", () => {
       await driver.prompt(id, "ping");
     }
     await until("all listed", async () => (await list(ahp)).items.length >= 5);
+    // New sessions keep arriving and reordering as titles land, so page only once two polls agree.
+    let last = "";
+    await until("the catalog settles", async () => {
+      await sleep(400);
+      const now = JSON.stringify((await list(ahp)).items.map((s) => [s.resource, s.modifiedAt]));
+      const settled = now === last;
+      last = now;
+      return settled;
+    });
     const seen: string[] = [];
     let cursor: string | undefined;
     do {
