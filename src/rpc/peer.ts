@@ -114,6 +114,7 @@ export class JsonRpcPeer {
       return;
     }
     const hasId = "id" in message && message.id !== undefined && message.id !== null;
+    log.debug("<-", summarize(message));
     if (typeof message.method === "string") {
       if (hasId) {
         void this.dispatchRequest(message.id as number | string, message.method, message.params);
@@ -195,6 +196,31 @@ export class JsonRpcPeer {
     if (this.closed) {
       return;
     }
+    log.debug("->", summarize(message));
     this.transport.send(JSON.stringify(message));
   }
+}
+
+// One short line per frame for debug logs: enough to follow a session, never the payloads.
+function summarize(message: Json): string {
+  const parts: string[] = [];
+  if (message.id !== undefined && message.id !== null) {
+    parts.push(`#${String(message.id)}`);
+  }
+  if (typeof message.method === "string") {
+    parts.push(message.method);
+    const params = isObject(message.params) ? message.params : {};
+    const action = isObject(params.action) ? params.action : undefined;
+    if (typeof params.channel === "string") {
+      parts.push(params.channel);
+    }
+    if (action && typeof action.type === "string") {
+      parts.push(action.type);
+    }
+  } else if (isObject(message.error)) {
+    parts.push(`error ${String(message.error.code)} ${String(message.error.message)}`);
+  } else {
+    parts.push("ok");
+  }
+  return parts.join(" ");
 }

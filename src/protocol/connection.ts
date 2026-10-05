@@ -67,6 +67,7 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
     connection.clientId = clientId;
     connection.version = version;
     core.rememberVersion(clientId, version);
+    log.info(`client ${clientId} negotiated ${version}`);
   };
 
   peer.onRequest("initialize", async (raw) => {
@@ -164,6 +165,7 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
       throw new RpcError(ErrorCodes.InternalError, "connection closed");
     }
     const snapshot = core.store.snapshot(uri);
+    log.debug(`snapshot ${uri}`, describeSnapshot(snapshot));
     core.join(connection, uri);
     return snapshot;
   }
@@ -310,4 +312,18 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
 
 function isSnapshot(value: Snapshot | undefined): value is Snapshot {
   return value !== undefined;
+}
+
+function describeSnapshot(snapshot: unknown): string {
+  const state = (snapshot as { state?: Record<string, unknown> } | undefined)?.state ?? {};
+  const turns = Array.isArray(state.turns) ? state.turns.length : undefined;
+  const chats = Array.isArray(state.chats) ? state.chats.length : undefined;
+  const parts = [`fromSeq=${String((snapshot as { fromSeq?: unknown } | undefined)?.fromSeq)}`, `keys=${Object.keys(state).join(",")}`];
+  if (turns !== undefined) {
+    parts.push(`turns=${turns}`, `active=${state.activeTurn !== undefined}`, `more=${state.turnsNextCursor !== undefined}`);
+  }
+  if (chats !== undefined) {
+    parts.push(`chats=${chats}`);
+  }
+  return parts.join(" ");
 }
