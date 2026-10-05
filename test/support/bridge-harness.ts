@@ -180,16 +180,16 @@ export const ROW = (overrides: Partial<HydraSessionEntry> = {}): HydraSessionEnt
 
 export async function startBridgeHarness(
   setup: (hydra: FakeHydra) => void = () => undefined,
-  options: { permissionDelayMs?: number; models?: ModelStore; flags?: FlagStore; changesetPollMs?: number } = {},
+  options: { permissionDelayMs?: number; models?: ModelStore; flags?: FlagStore; changesetPollMs?: number; unpromptedGraceMs?: number } = {},
 ): Promise<BridgeHarness> {
   const hydra = new FakeHydra();
   hydra.rows = [ROW()];
   setup(hydra);
   const dir = mkdtempSync(join(tmpdir(), "ahp-bridge-"));
   const tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
-  const { models, flags, changesetPollMs, ...backendOptions } = options;
+  const { models, flags, changesetPollMs, unpromptedGraceMs, ...backendOptions } = options;
   const withChangesets = changesetPollMs !== undefined;
-  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}), ...(flags ? { flags } : {}), changesets: withChangesets });
+  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}), ...(flags ? { flags } : {}), changesets: withChangesets, ...(unpromptedGraceMs !== undefined ? { unpromptedGraceMs } : {}) });
   const changesets = withChangesets
     ? new ChangesetService({
         cwdOf: (uri) => catalog.localCwdOf(uri),
