@@ -11,7 +11,8 @@ import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { FileService } from "../files/service.js";
 import type { TerminalService } from "../terminals/service.js";
-import { isTerminalUri } from "../protocol/channels.js";
+import type { ChangesetService } from "../changesets/service.js";
+import { isChangesetChannelUri, isTerminalUri } from "../protocol/channels.js";
 import { HydraHttpError, type HydraRest, type HydraSessionEntry } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
@@ -43,6 +44,7 @@ export interface HydraBackendOptions {
   version: string;
   files: FileService;
   terminals?: TerminalService;
+  changesets?: ChangesetService;
   permissionDelayMs?: number;
 }
 
@@ -64,6 +66,7 @@ export class HydraBackend implements Backend {
   private readonly creating = new Map<string, Promise<void>>();
   private readonly files: FileService;
   private readonly terminals: TerminalService | undefined;
+  private readonly changesets: ChangesetService | undefined;
   private readonly permissionDelayMs: number;
 
   constructor(options: HydraBackendOptions) {
@@ -73,6 +76,7 @@ export class HydraBackend implements Backend {
     this.sessions = options.sessions;
     this.files = options.files;
     this.terminals = options.terminals;
+    this.changesets = options.changesets;
     this.permissionDelayMs = options.permissionDelayMs ?? 0;
     this.serverInfo = { name: "hydra-ahp", version: options.version };
   }
@@ -80,6 +84,7 @@ export class HydraBackend implements Backend {
   async start(core: ProtocolCore): Promise<void> {
     this.core = core;
     await this.terminals?.start(core);
+    this.changesets?.start(core);
     this.catalog.onChange(() => this.onCatalogChange());
     await this.catalog.start(core);
   }
@@ -87,6 +92,7 @@ export class HydraBackend implements Backend {
   async stop(): Promise<void> {
     this.catalog.stop();
     this.terminals?.stop();
+    this.changesets?.stop();
     const bridges = [...this.bridges.values()];
     this.bridges.clear();
     await Promise.all(bridges.map((bridge) => bridge.dispose().catch(() => undefined)));
@@ -205,6 +211,10 @@ export class HydraBackend implements Backend {
 
   // A session channel is a view of the catalog row; the chat channel is built by the bridge from Hydra's history.
   async attach(uri: string): Promise<void> {
+    if (isChangesetChannelUri(uri)) {
+      this.changesets?.attach(uri);
+      return;
+    }
     await this.creating.get(uri);
     if (isChatUri(uri)) {
       if (this.core.store.has(uri) && !this.catalog.resolveChat(uri)) {
@@ -225,11 +235,15 @@ export class HydraBackend implements Backend {
     }
     const summary = this.catalog.summaryFor(uri);
     if (summary && !this.core.store.has(uri)) {
-      this.core.createChannel(uri, summaryToSessionState(summary, "ready", this.catalog.configStateFor(uri)));
+      this.core.createChannel(uri, summaryToSessionState(summary, "ready", this.catalog.configStateFor(uri), this.catalog.changesetsOf(uri)));
     }
   }
 
   async detach(uri: string): Promise<void> {
+    if (isChangesetChannelUri(uri)) {
+      this.changesets?.detach(uri);
+      return;
+    }
     if (isSessionUri(uri)) {
       for (const id of this.catalog.membersOf(uri)) {
         const chat = this.catalog.chatOf(id);
@@ -283,6 +297,10 @@ export class HydraBackend implements Backend {
   }
 
   async handleCommand(method: string, params: unknown, client: ClientContext): Promise<unknown> {
+    const target = (params as { uri?: unknown } | undefined)?.uri;
+    if (method === "resourceRead" && this.changesets?.ownsContent(target)) {
+      return this.changesets.read(target, (params as { encoding?: unknown }).encoding);
+    }
     if (this.files.handles(method)) {
       return this.files.handle(method, params, client);
     }
@@ -398,6 +416,10 @@ export class HydraBackend implements Backend {
       const entry = await this.rest.getSession(hydraId);
       this.catalog.claim(hydraId, channel, entry);
       this.core.publish(channel, action({ type: "session/ready" }));
+      const changesets = this.catalog.changesetsOf(channel);
+      if (changesets) {
+        this.core.publish(channel, action({ type: "session/changesetsChanged", changesets }));
+      }
       // A client may have subscribed to the chat while the session was being created.
       const chat = defaultChatUri(channel);
       if (this.core.hasSubscribers(chat) || Object.keys(picks).length > 0) {

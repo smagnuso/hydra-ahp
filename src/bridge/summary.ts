@@ -1,4 +1,4 @@
-import type { SessionConfigState, SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
+import type { Changeset, SessionConfigState, SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
 import type { HydraSessionEntry } from "../hydra/rest.js";
 import { NO_FLAGS, type SessionFlags } from "../store/flags.js";
 import { cwdToUri, defaultChatUri, isFederatedId } from "./ids.js";
@@ -98,6 +98,7 @@ export function summaryToSessionState(
   summary: SessionSummary,
   lifecycle: "creating" | "ready",
   config?: SessionConfigState,
+  changesets?: Changeset[],
 ): SessionState {
   const chats = (summary.chats ?? []).map((chat) => ({
     resource: chat.resource,
@@ -113,6 +114,7 @@ export function summaryToSessionState(
     chats,
     ...(summary.defaultChat ? { defaultChat: summary.defaultChat } : {}),
     ...(config ? { config } : {}),
+    ...(changesets ? { changesets } : {}),
     ...(_meta ? { _meta } : {}),
   } as unknown as SessionState;
 }

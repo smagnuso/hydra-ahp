@@ -1,0 +1,115 @@
+import { execFile } from "node:child_process";
+import { readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
+
+const MAX_BUFFER = 64 * 1024 * 1024;
+// Untracked files are counted line by line; past this size they are shown without a count.
+const MAX_COUNTED_BYTES = 1024 * 1024;
+
+export interface ChangedFile {
+  // Path relative to the repository root, as git prints it.
+  path: string;
+  inHead: boolean;
+  onDisk: boolean;
+  added?: number;
+  removed?: number;
+}
+
+export interface WorkingChanges {
+  root: string;
+  files: ChangedFile[];
+}
+
+function git(cwd: string, args: string[]): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    execFile("git", args, { cwd, maxBuffer: MAX_BUFFER, encoding: "buffer" }, (err, stdout) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+function fields(output: Buffer): string[] {
+  return output.toString("utf8").split("\0").filter((entry) => entry !== "");
+}
+
+export async function repoRoot(cwd: string): Promise<string | undefined> {
+  try {
+    return (await git(cwd, ["rev-parse", "--show-toplevel"])).toString("utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function hasHead(root: string): Promise<boolean> {
+  try {
+    await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// What differs from HEAD in the working tree, staged or not, untracked files included; undefined outside a repository.
+export async function workingChanges(cwd: string): Promise<WorkingChanges | undefined> {
+  const root = await repoRoot(cwd);
+  if (!root) {
+    return undefined;
+  }
+  const headExists = await hasHead(root);
+  const status = fields(await git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]));
+  const counts = new Map<string, { added?: number; removed?: number }>();
+  if (headExists) {
+    const numstat = fields(await git(root, ["diff", "HEAD", "--numstat", "-z", "--no-renames"]));
+    for (const line of numstat) {
+      const [added, removed, path] = line.split("\t");
+      if (path === undefined) {
+        continue;
+      }
+      counts.set(path, {
+        ...(added !== "-" ? { added: Number(added) } : {}),
+        ...(removed !== "-" ? { removed: Number(removed) } : {}),
+      });
+    }
+  }
+  const files: ChangedFile[] = [];
+  for (const entry of status) {
+    const index = entry[0];
+    const tree = entry[1];
+    const path = entry.slice(3);
+    const inHead = headExists && entry.slice(0, 2) !== "??" && index !== "A";
+    const onDisk = index !== "D" && tree !== "D";
+    if (!inHead && !onDisk) {
+      continue;
+    }
+    const counted = counts.get(path) ?? (inHead ? {} : await countLines(join(root, path)));
+    files.push({ path, inHead, onDisk, ...counted });
+  }
+  return { root, files };
+}
+
+async function countLines(file: string): Promise<{ added?: number }> {
+  try {
+    if ((await stat(file)).size > MAX_COUNTED_BYTES) {
+      return {};
+    }
+    const bytes = await readFile(file);
+    if (bytes.includes(0)) {
+      return {};
+    }
+    const text = bytes.toString("utf8");
+    if (text === "") {
+      return { added: 0 };
+    }
+    return { added: text.split("\n").length - (text.endsWith("\n") ? 1 : 0) };
+  } catch {
+    return {};
+  }
+}
+
+export async function headContent(root: string, path: string): Promise<Buffer> {
+  return git(root, ["show", `HEAD:${path}`]);
+}

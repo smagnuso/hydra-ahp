@@ -1,5 +1,6 @@
 import { ProtocolCore } from "./protocol/core.js";
 import { AhpListener } from "./server/listener.js";
+import { ChangesetService } from "./changesets/service.js";
 import { FlagStore } from "./store/flags.js";
 import { TerminalService } from "./terminals/service.js";
 import { ConfigStore } from "./store/configs.js";
@@ -68,11 +69,13 @@ export async function startApp(config: Config, version: string): Promise<App> {
     configs: new ConfigStore(config.configsPath),
     ...(config.pollMs !== undefined ? { pollMs: config.pollMs } : {}),
     ...(config.warmPollMs !== undefined ? { warmPollMs: config.warmPollMs } : {}),
+    changesets: true,
   });
   const sessions = new HydraSessions(client, { name: "hydra-ahp", version });
   const files = new FileService({ sessions: catalog, dirRoots: config.dirRoots });
   const terminals = new TerminalService();
-  const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, permissionDelayMs: config.permissionDelayMs });
+  const changesets = new ChangesetService({ cwdOf: (uri) => catalog.localCwdOf(uri) });
+  const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, changesets, permissionDelayMs: config.permissionDelayMs });
   const core = new ProtocolCore({ backend, detachGraceMs: DETACH_GRACE_MS });
   await core.start();
 

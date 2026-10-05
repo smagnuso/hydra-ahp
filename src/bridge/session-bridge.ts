@@ -251,7 +251,7 @@ export class SessionBridge implements SessionListener {
     if (!summary) {
       throw new RpcError(SESSION_NOT_FOUND, "Session not found");
     }
-    core.createChannel(sessionUri, summaryToSessionState(summary, "ready", catalog.configStateFor(sessionUri)));
+    core.createChannel(sessionUri, summaryToSessionState(summary, "ready", catalog.configStateFor(sessionUri), catalog.changesetsOf(sessionUri)));
   }
 
   private async doAttach(forceLive: boolean): Promise<void> {

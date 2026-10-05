@@ -15,6 +15,7 @@ const PREFIX_KIND: Record<string, ChannelKind> = {
   session: "session",
   chat: "chat",
   terminal: "terminal",
+  changeset: "changeset",
 };
 
 function reject(reason: string): Validation {

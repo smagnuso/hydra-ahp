@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { ChangesetService } from "../../src/changesets/service.js";
 import { FlagStore } from "../../src/store/flags.js";
 import { ModelStore } from "../../src/store/models.js";
 import { tmpdir } from "node:os";
@@ -171,16 +172,18 @@ export const ROW = (overrides: Partial<HydraSessionEntry> = {}): HydraSessionEnt
 
 export async function startBridgeHarness(
   setup: (hydra: FakeHydra) => void = () => undefined,
-  options: { permissionDelayMs?: number; models?: ModelStore; flags?: FlagStore } = {},
+  options: { permissionDelayMs?: number; models?: ModelStore; flags?: FlagStore; changesetPollMs?: number } = {},
 ): Promise<BridgeHarness> {
   const hydra = new FakeHydra();
   hydra.rows = [ROW()];
   setup(hydra);
   const dir = mkdtempSync(join(tmpdir(), "ahp-bridge-"));
   const tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
-  const { models, flags, ...backendOptions } = options;
-  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}), ...(flags ? { flags } : {}) });
-  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ shell: "/bin/sh", orphanGraceMs: 200 }), ...backendOptions });
+  const { models, flags, changesetPollMs, ...backendOptions } = options;
+  const withChangesets = changesetPollMs !== undefined;
+  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}), ...(flags ? { flags } : {}), changesets: withChangesets });
+  const changesets = withChangesets ? new ChangesetService({ cwdOf: (uri) => catalog.localCwdOf(uri), pollMs: changesetPollMs }) : undefined;
+  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ shell: "/bin/sh", orphanGraceMs: 200 }), ...(changesets ? { changesets } : {}), ...backendOptions });
   const core = new ProtocolCore({ backend });
   await core.start();
   const listener = new AhpListener({ core, tokens });

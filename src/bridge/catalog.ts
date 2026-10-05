@@ -1,4 +1,5 @@
-import type { AgentInfo, RootState, SessionConfigState, SessionSummary } from "@microsoft/agent-host-protocol";
+import type { AgentInfo, Changeset, RootState, SessionConfigState, SessionSummary } from "@microsoft/agent-host-protocol";
+import { changesetsFor } from "../changesets/service.js";
 import { ROOT_URI } from "../protocol/channels.js";
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
@@ -31,6 +32,8 @@ export interface CatalogOptions {
   pollMs?: number;
   warmPollMs?: number;
   agentsEveryPolls?: number;
+  // Advertise each local session's uncommitted changes; the backend must serve them.
+  changesets?: boolean;
 }
 
 type Json = Record<string, unknown>;
@@ -140,6 +143,16 @@ export class Catalog {
 
   membersOf(sessionUri: string): string[] {
     return this.groups.get(sessionUri) ?? [];
+  }
+
+  // Where a session's files are on this machine; undefined when they live on a remote or federated host.
+  localCwdOf(sessionUri: string): string | undefined {
+    const lead = this.membersOf(sessionUri)[0];
+    return lead && this.isLocal(lead) ? this.entries.get(lead)?.cwd : undefined;
+  }
+
+  changesetsOf(sessionUri: string): Changeset[] | undefined {
+    return this.options.changesets && this.localCwdOf(sessionUri) ? changesetsFor(sessionUri) : undefined;
   }
 
   isDefaultMember(hydraId: string): boolean {
