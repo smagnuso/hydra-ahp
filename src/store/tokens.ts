@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -57,6 +57,7 @@ export class TokenRegistry {
   private readonly idleMs: number;
   private readonly now: () => number;
   private readonly revokeListeners = new Set<(id: string) => void>();
+  private signature = "";
 
   constructor(options: TokenRegistryOptions) {
     this.path = options.path;
@@ -69,6 +70,7 @@ export class TokenRegistry {
     if (!isFileLevel(level)) {
       throw new Error(`invalid file level: ${String(level)}`);
     }
+    this.refresh();
     const token = randomBytes(32).toString("base64url");
     const at = this.now();
     const entry: TokenEntry = {
@@ -90,6 +92,30 @@ export class TokenRegistry {
     if (!token) {
       return undefined;
     }
+    this.refresh();
+    return this.match(token);
+  }
+
+  // Picks up mints and revokes made by another process (the CLI) and closes connections for revoked ids.
+  refresh(): boolean {
+    const before = this.signature;
+    if (this.fileSignature() === before) {
+      return false;
+    }
+    const known = new Set(this.entries.map((entry) => entry.id));
+    this.load();
+    const current = new Set(this.entries.map((entry) => entry.id));
+    for (const id of known) {
+      if (!current.has(id)) {
+        for (const listener of this.revokeListeners) {
+          listener(id);
+        }
+      }
+    }
+    return true;
+  }
+
+  private match(token: string): TokenInfo | undefined {
     const digest = sha256(token);
     let match: TokenEntry | undefined;
     for (const entry of this.entries) {
@@ -115,6 +141,7 @@ export class TokenRegistry {
   }
 
   revoke(id: string): boolean {
+    this.refresh();
     const index = this.entries.findIndex((entry) => entry.id === id);
     if (index < 0) {
       return false;
@@ -134,12 +161,23 @@ export class TokenRegistry {
     };
   }
 
+  private fileSignature(): string {
+    try {
+      const stat = statSync(this.path);
+      return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    } catch {
+      return "";
+    }
+  }
+
   private load(): void {
+    this.signature = this.fileSignature();
     let text: string;
     try {
       text = readFileSync(this.path, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        this.entries = [];
         return;
       }
       throw err;
@@ -155,5 +193,6 @@ export class TokenRegistry {
       mode: 0o600,
     });
     renameSync(tmp, this.path);
+    this.signature = this.fileSignature();
   }
 }

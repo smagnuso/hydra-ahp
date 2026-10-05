@@ -1,0 +1,150 @@
+export class HydraHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: unknown,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HydraHttpError";
+  }
+}
+
+export interface HydraSessionEntry {
+  sessionId: string;
+  agentId?: string;
+  cwd?: string;
+  title?: string;
+  status?: "warm" | "cold";
+  busy?: boolean;
+  awaitingInput?: boolean;
+  attachedClients?: number;
+  updatedAt?: string;
+  createdAt?: string;
+  interactive?: boolean;
+  remote?: string;
+  currentModel?: string;
+  turnStartedAt?: number;
+  importedFromMachine?: string;
+  upstreamSessionId?: string;
+  parentSessionId?: string;
+  [key: string]: unknown;
+}
+
+export interface SessionPage {
+  sessions: HydraSessionEntry[];
+  removed: string[];
+  cursor?: number;
+}
+
+export interface ListQuery {
+  since?: number;
+  status?: "warm" | "cold";
+  includeNonInteractive?: boolean;
+}
+
+export interface HydraAgent {
+  id: string;
+  name: string;
+  version?: string;
+  description?: string;
+  installed?: "yes" | "no" | "lazy";
+}
+
+export interface HistoryPage {
+  entries: unknown[];
+  hasMore: boolean;
+}
+
+export interface SystemInfo {
+  machine?: string;
+  hydraVersion?: string;
+}
+
+export class HydraRest {
+  constructor(
+    readonly baseUrl: string,
+    private readonly token: string,
+  ) {}
+
+  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    const text = await response.text();
+    let parsed: unknown = text;
+    try {
+      parsed = text ? JSON.parse(text) : undefined;
+    } catch {
+      parsed = text;
+    }
+    if (!response.ok) {
+      const detail = typeof parsed === "object" && parsed !== null ? (parsed as { error?: unknown }).error : undefined;
+      throw new HydraHttpError(
+        response.status,
+        parsed,
+        `${method} ${path} failed with ${response.status}${detail ? `: ${String(detail)}` : ""}`,
+      );
+    }
+    return parsed as T;
+  }
+
+  health(): Promise<{ status: string; version: string }> {
+    return fetch(`${this.baseUrl}/v1/health`).then((r) => r.json() as Promise<{ status: string; version: string }>);
+  }
+
+  system(): Promise<SystemInfo> {
+    return this.request("GET", "/v1/system");
+  }
+
+  listSessions(query: ListQuery = {}): Promise<SessionPage> {
+    const params = new URLSearchParams();
+    if (query.since !== undefined) {
+      params.set("since", String(query.since));
+    }
+    if (query.status) {
+      params.set("status", query.status);
+    }
+    if (query.includeNonInteractive) {
+      params.set("includeNonInteractive", "1");
+    }
+    const suffix = params.size > 0 ? `?${params}` : "";
+    return this.request("GET", `/v1/sessions${suffix}`);
+  }
+
+  getSession(id: string): Promise<HydraSessionEntry> {
+    return this.request("GET", `/v1/sessions/${encodeURIComponent(id)}`);
+  }
+
+  createSession(body: { cwd?: string; agentId?: string; remote?: string }): Promise<{
+    sessionId: string;
+    agentId?: string;
+    cwd?: string;
+  }> {
+    return this.request("POST", "/v1/sessions", body);
+  }
+
+  deleteSession(id: string): Promise<void> {
+    return this.request("DELETE", `/v1/sessions/${encodeURIComponent(id)}`);
+  }
+
+  patchSession(id: string, body: { title?: string }): Promise<unknown> {
+    return this.request("PATCH", `/v1/sessions/${encodeURIComponent(id)}`, body);
+  }
+
+  agents(): Promise<{ agents: HydraAgent[] }> {
+    return this.request("GET", "/v1/agents");
+  }
+
+  historyPage(id: string, beforeSeq: number, turns?: number): Promise<HistoryPage> {
+    const params = new URLSearchParams({ beforeSeq: String(beforeSeq) });
+    if (turns !== undefined) {
+      params.set("turns", String(turns));
+    }
+    return this.request("GET", `/v1/sessions/${encodeURIComponent(id)}/history/page?${params}`);
+  }
+}

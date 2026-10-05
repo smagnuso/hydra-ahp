@@ -1,0 +1,91 @@
+import { ProtocolCore } from "./protocol/core.js";
+import { AhpListener } from "./server/listener.js";
+import { TokenRegistry } from "./store/tokens.js";
+import { Catalog } from "./bridge/catalog.js";
+import { HydraBackend } from "./bridge/hydra-backend.js";
+import { COMMAND_SPEC, COMMAND_VERB, runTokenCommand } from "./commands/tokens.js";
+import type { Config } from "./config.js";
+import { HydraClient } from "./hydra/client.js";
+import { ExtensionState } from "./hydra/ext-state.js";
+import { HydraRest } from "./hydra/rest.js";
+import { checkHydraVersion } from "./hydra/version.js";
+import { logger, setDebug } from "./util/log.js";
+
+const log = logger("app");
+
+const TOKEN_REFRESH_MS = 5000;
+
+export interface App {
+  port: number;
+  stop(): Promise<void>;
+}
+
+export async function discoverHydraVersion(rest: HydraRest): Promise<string | undefined> {
+  try {
+    return (await rest.system()).hydraVersion;
+  } catch {
+    return (await rest.health()).version;
+  }
+}
+
+export async function startApp(config: Config, version: string): Promise<App> {
+  setDebug(config.debug);
+  const rest = new HydraRest(config.daemonUrl, config.token);
+  checkHydraVersion(await discoverHydraVersion(rest));
+
+  const client = await HydraClient.connect({
+    wsUrl: config.wsUrl,
+    token: config.token,
+    clientInfo: { name: "hydra-ahp", version },
+  });
+  let stopping = false;
+  client.onClose(() => {
+    if (!stopping) {
+      log.error("lost the connection to the Hydra daemon; exiting so it can restart the extension");
+      process.exit(1);
+    }
+  });
+  const tokens = new TokenRegistry({
+    path: config.tokensPath,
+    ...(config.idleMs !== undefined ? { idleMs: config.idleMs } : {}),
+  });
+  const extState = new ExtensionState(client);
+  const catalog = new Catalog({
+    rest,
+    extState,
+    ...(config.pollMs !== undefined ? { pollMs: config.pollMs } : {}),
+    ...(config.warmPollMs !== undefined ? { warmPollMs: config.warmPollMs } : {}),
+  });
+  const backend = new HydraBackend({ catalog, rest, extState, version });
+  const core = new ProtocolCore({ backend });
+  await core.start();
+
+  const listener = new AhpListener({ core, tokens, port: config.port });
+  const port = await listener.listen();
+
+  client.peer.onRequest("hydra-acp/commands/invoke", (raw) => {
+    const params = (raw ?? {}) as { verb?: string; args?: string };
+    if (params.verb !== COMMAND_VERB) {
+      return {};
+    }
+    return { text: runTokenCommand({ tokens, address: () => `127.0.0.1:${port}` }, params.args ?? "") };
+  });
+  await client.request("hydra-acp/commands/register", { commands: [COMMAND_SPEC] });
+
+  const refreshTimer = setInterval(() => {
+    tokens.refresh();
+  }, TOKEN_REFRESH_MS);
+  refreshTimer.unref();
+
+  log.info(`serving AHP on 127.0.0.1:${port} for Hydra ${config.daemonUrl}`);
+  return {
+    port,
+    async stop() {
+      stopping = true;
+      clearInterval(refreshTimer);
+      backend.stop();
+      await listener.close();
+      client.close();
+    },
+  };
+}
