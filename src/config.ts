@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { homedir } from "node:os";
 
 export const DEFAULT_PORT = 55590;
@@ -14,6 +14,7 @@ export interface Config {
   warmPollMs: number | undefined;
   debug: boolean;
   tokensPath: string;
+  dirRoots: string[];
 }
 
 function numberFrom(env: NodeJS.ProcessEnv, key: string): number | undefined {
@@ -36,6 +37,15 @@ export function tokensPath(env: NodeJS.ProcessEnv): string {
   return join(hydraHome(env), "extensions", "ahp", "tokens.json");
 }
 
+// Directories the folder picker may browse (directories only) at the scoped level; defaults to the home directory.
+export function dirRoots(env: NodeJS.ProcessEnv): string[] {
+  const raw = env.HYDRA_AHP_DIR_ROOTS;
+  if (raw === undefined) {
+    return [homedir()];
+  }
+  return raw.split(delimiter).filter((entry) => entry !== "");
+}
+
 // Hydra injects the daemon coordinates and the extension token; the HYDRA_AHP_* variables come from the config.json env block.
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const token = env.HYDRA_ACP_TOKEN;
@@ -56,5 +66,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warmPollMs: numberFrom(env, "HYDRA_AHP_WARM_POLL_MS"),
     debug: env.HYDRA_AHP_LOG_LEVEL === "debug",
     tokensPath: tokensPath(env),
+    dirRoots: dirRoots(env),
   };
 }

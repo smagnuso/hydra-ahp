@@ -4,7 +4,8 @@ import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { HydraAgent, HydraRest, HydraSessionEntry, SessionPage } from "../hydra/rest.js";
 import { logger } from "../util/log.js";
-import { chatUri, isFederatedId, sessionKey, sessionUri } from "./ids.js";
+import type { FileSession } from "../files/service.js";
+import { chatKey, chatUri, isChatUri, isFederatedId, sessionKey, sessionUri } from "./ids.js";
 import { entryToSummary } from "./summary.js";
 
 const log = logger("catalog");
@@ -24,6 +25,17 @@ export interface CatalogOptions {
 }
 
 type Json = Record<string, unknown>;
+
+// Name of the machine that owns the session's files, when it is not this one (mirrors the browser's foreignCwdOwner).
+function remoteOwner(entry: HydraSessionEntry): string | undefined {
+  if (entry.remote !== undefined) {
+    return entry.remote;
+  }
+  if (entry.importedFromMachine !== undefined && !entry.upstreamSessionId) {
+    return entry.importedFromMachine;
+  }
+  return isFederatedId(entry.sessionId) ? entry.sessionId.slice(0, entry.sessionId.indexOf(":")) : undefined;
+}
 
 const action = (value: Json) => value as never;
 
@@ -111,6 +123,27 @@ export class Catalog {
 
   entry(hydraId: string): HydraSessionEntry | undefined {
     return this.entries.get(hydraId);
+  }
+
+  // Every session with a known cwd, for the file scope; remote marks sessions whose files live on a peer.
+  fileSessions(): FileSession[] {
+    const sessions: FileSession[] = [];
+    for (const entry of this.entries.values()) {
+      if (!entry.cwd) {
+        continue;
+      }
+      const remote = remoteOwner(entry);
+      sessions.push({ id: entry.sessionId, cwd: entry.cwd, ...(remote !== undefined ? { remote } : {}) });
+    }
+    return sessions;
+  }
+
+  sessionForChat(chat: string): FileSession | undefined {
+    if (!isChatUri(chat)) {
+      return undefined;
+    }
+    const hydraId = this.resolve(sessionUri(chatKey(chat)));
+    return hydraId ? this.fileSessions().find((session) => session.id === hydraId) : undefined;
   }
 
   uriInUse(uri: string): boolean {

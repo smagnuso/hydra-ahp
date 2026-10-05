@@ -5,9 +5,10 @@ import type {
   SessionState,
 } from "@microsoft/agent-host-protocol";
 import { ErrorCodes, RpcError } from "../rpc/peer.js";
-import type { ActionDecision, ActionRequest, Backend } from "../protocol/backend.js";
+import type { ActionDecision, ActionRequest, Backend, ClientContext } from "../protocol/backend.js";
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
+import type { FileService } from "../files/service.js";
 import { HydraHttpError, type HydraRest } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
@@ -34,6 +35,7 @@ export interface HydraBackendOptions {
   extState: ExtensionState;
   sessions: HydraSessions;
   version: string;
+  files: FileService;
 }
 
 function message(err: unknown): string {
@@ -44,18 +46,21 @@ function message(err: unknown): string {
 export class HydraBackend implements Backend {
   readonly serverInfo: { name: string; version: string };
   readonly defaultDirectory = cwdToUri(homedir());
+  readonly completionTriggerCharacters = ["@"];
   private core!: ProtocolCore;
   private readonly catalog: Catalog;
   private readonly rest: HydraRest;
   private readonly extState: ExtensionState;
   private readonly sessions: HydraSessions;
   private readonly bridges = new Map<string, SessionBridge>();
+  private readonly files: FileService;
 
   constructor(options: HydraBackendOptions) {
     this.catalog = options.catalog;
     this.rest = options.rest;
     this.extState = options.extState;
     this.sessions = options.sessions;
+    this.files = options.files;
     this.serverInfo = { name: "hydra-ahp", version: options.version };
   }
 
@@ -169,7 +174,10 @@ export class HydraBackend implements Backend {
     return { accept: false, reason: "this host does not accept that action yet" };
   }
 
-  async handleCommand(method: string, params: unknown): Promise<unknown> {
+  async handleCommand(method: string, params: unknown, client: ClientContext): Promise<unknown> {
+    if (this.files.handles(method)) {
+      return this.files.handle(method, params, client);
+    }
     const body = (params ?? {}) as Record<string, unknown>;
     switch (method) {
       case "createSession":

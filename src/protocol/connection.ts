@@ -88,6 +88,9 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
       serverSeq: core.store.serverSeq,
       snapshots,
       ...(core.backend.serverInfo ? { serverInfo: core.backend.serverInfo } : {}),
+      ...(core.backend.completionTriggerCharacters
+        ? { completionTriggerCharacters: core.backend.completionTriggerCharacters }
+        : {}),
       ...(core.backend.defaultDirectory ? { defaultDirectory: core.backend.defaultDirectory } : {}),
     };
     return result;

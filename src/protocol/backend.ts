@@ -27,6 +27,7 @@ export type ActionDecision = { accept: true } | { accept: false; reason: string 
 export interface Backend {
   serverInfo?: Implementation;
   defaultDirectory?: string;
+  completionTriggerCharacters?: string[];
 
   start(core: ProtocolCore): void | Promise<void>;
 

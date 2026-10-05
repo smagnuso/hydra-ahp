@@ -5,6 +5,7 @@ import { Catalog } from "../../src/bridge/catalog.js";
 import { HydraBackend } from "../../src/bridge/hydra-backend.js";
 import type { Frame } from "../../src/bridge/mapping.js";
 import type { Json } from "../../src/bridge/turns.js";
+import { FileService } from "../../src/files/service.js";
 import type { ExtensionState } from "../../src/hydra/ext-state.js";
 import type { HistoryPage, HydraRest, HydraSessionEntry } from "../../src/hydra/rest.js";
 import type { AttachOptions, AttachResult, HydraSessions, SessionListener } from "../../src/hydra/sessions.js";
@@ -106,7 +107,7 @@ export async function startBridgeHarness(setup: (hydra: FakeHydra) => void = () 
   const dir = mkdtempSync(join(tmpdir(), "ahp-bridge-"));
   const tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
   const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40 });
-  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0" });
+  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }) });
   const core = new ProtocolCore({ backend });
   await core.start();
   const listener = new AhpListener({ core, tokens });
