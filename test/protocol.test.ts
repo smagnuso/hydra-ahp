@@ -323,7 +323,12 @@ describe.each(["0.9.0", "1.0.0"])("protocol at %s", (version) => {
       await session.client.ping();
       await session.client.shutdown();
       await session.closed;
-      expect(harness.backend.detached.sort()).toEqual([...subscriptions, sessionUri("s2")].sort());
+      const wanted = [...subscriptions, sessionUri("s2")].sort();
+      // The client sees its socket close before the server has detached every channel.
+      for (let tries = 0; tries < 100 && harness.backend.detached.length < wanted.length; tries++) {
+        await sleep(20);
+      }
+      expect(harness.backend.detached.sort()).toEqual(wanted);
 
       harness.backend.streamReply(CHAT, "t1", "alpha beta");
       harness.backend.core.publish(SESSION, act({ type: "session/titleChanged", title: "Renamed" }));

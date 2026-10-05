@@ -97,6 +97,36 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
     expect(state.turns.map((turn) => turn.message.origin.kind)).toEqual(["agent", "agent"]);
   });
 
+  it("puts the agent's answer to an injected steer in the steered turn even when it beats Hydra's reply", async () => {
+    harness = await startBridgeHarness();
+    const { session, oracle } = await open();
+    hydra(agentStarted("a1"), 1_000);
+    hydra(said("working"), 1_100);
+    await session.waitFor((envelope) => envelope.action.type === "chat/delta");
+    harness.hydra.sessions.steer = async () => {
+      hydra(said("steered answer"), 1_200);
+      await sleep(30);
+      return { outcome: "injected" };
+    };
+
+    await dispatch(session, {
+      type: "chat/pendingMessageSet",
+      kind: "steering",
+      id: "s1",
+      message: { text: "change course", origin: { kind: "user" } },
+    });
+    hydra(agentEnded("a1", 400), 1_400);
+    await session.waitFor((envelope) => envelope.action.type === "chat/turnComplete" && (envelope.action as { turnId?: string }).turnId === "steer-s1");
+
+    const text = (turn: ChatState["turns"][number]) =>
+      turn.responseParts.map((part) => (part.kind === "markdown" ? part.content : "")).join("");
+    const state = chat(session, oracle);
+    expect(state.turns.map((turn) => [turn.id, turn.message.text, text(turn)])).toEqual([
+      ["a1", "", "working"],
+      ["steer-s1", "change course", "steered answer"],
+    ]);
+  });
+
   it("refuses to cancel a turn that is not running and sends Hydra no cancel", async () => {
     harness = await startBridgeHarness();
     const { session } = await open();

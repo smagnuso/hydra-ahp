@@ -24,6 +24,8 @@ const INITIAL_TURNS = 20;
 const SETTLE_WAIT_MS = 500;
 const ECHO_WAIT_MS = 5_000;
 const STEER_RETRY_MS = 500;
+// Events held while a steer is in flight are let through after this even if Hydra never answers it.
+const STEER_HOLD_MS = 5_000;
 
 // A prompt this bridge sent to Hydra. Hydra never echoes its own prompt_received or turn_complete to the sender.
 interface OwnEntry {
@@ -139,6 +141,8 @@ export class SessionBridge implements SessionListener {
   private mode: "live" | "viewer" | undefined;
   private unlisten: (() => void) | undefined;
   private buffering: Pending[] | undefined;
+  // Hydra's events while our own steer is in flight: the agent's answer can come before Hydra's reply, so it waits for the split.
+  private steerHold: { events: Pending[]; timer: NodeJS.Timeout } | undefined;
   private highWater: number | undefined;
   private sawClosed = false;
   private chain: Promise<unknown> = Promise.resolve();
@@ -209,6 +213,7 @@ export class SessionBridge implements SessionListener {
   }
 
   dispose(): Promise<void> {
+    this.releaseSteerHold();
     this.disposed = true;
     return this.serial(async () => {
       await this.release();
@@ -243,6 +248,10 @@ export class SessionBridge implements SessionListener {
   private deliver(event: Pending): void {
     if (this.buffering) {
       this.buffering.push(event);
+      return;
+    }
+    if (this.steerHold) {
+      this.steerHold.events.push(event);
       return;
     }
     this.handle(event, (actions) => this.publish(actions));
@@ -1133,6 +1142,7 @@ export class SessionBridge implements SessionListener {
     steer.triedAt = Date.now();
     const entry = ownEntry({ kind: "steer", pendingId: steer.id, message: steer.message, prompt: steer.prompt });
     this.sends.push(entry);
+    this.holdForSteer();
     this.deps.sessions.steer(this.deps.hydraId, steer.prompt).then(
       (result) => this.steered(steer, entry, result),
       (err) => {
@@ -1144,7 +1154,33 @@ export class SessionBridge implements SessionListener {
 
   // Per PROTOCOL.md: startedNewTurn without detached is an entry Hydra queued for us, whose start consumes the chip;
   // detached is already covered by _hydra_turn_started; injected is never echoed to the steering client.
+  private holdForSteer(): void {
+    this.releaseSteerHold();
+    this.steerHold = { events: [], timer: setTimeout(() => this.releaseSteerHold(), STEER_HOLD_MS) };
+    this.steerHold.timer.unref();
+  }
+
+  private releaseSteerHold(): void {
+    const hold = this.steerHold;
+    if (!hold) {
+      return;
+    }
+    this.steerHold = undefined;
+    clearTimeout(hold.timer);
+    for (const event of hold.events) {
+      this.deliver(event);
+    }
+  }
+
   private steered(steer: HeldSteer, entry: OwnEntry, result: SteeringResult): void {
+    try {
+      this.settleSteer(steer, entry, result);
+    } finally {
+      this.releaseSteerHold();
+    }
+  }
+
+  private settleSteer(steer: HeldSteer, entry: OwnEntry, result: SteeringResult): void {
     steer.inFlight = false;
     if (result.outcome === "promptRequired") {
       this.dropSend(entry);
@@ -1158,7 +1194,7 @@ export class SessionBridge implements SessionListener {
     }
     this.dropSend(entry);
     // Hydra does not echo an injected steer to the client that sent it, so the turn carrying it is announced here,
-    // before the agent's answer to it can arrive and land in the turn it steered.
+    // before the held answer to it is let through.
     if (result.outcome === "injected") {
       this.publish(this.mapper.steer(`steer-${steer.id}`, Date.now(), steer.message, steer.id));
     }
