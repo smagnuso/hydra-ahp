@@ -158,6 +158,7 @@ export class ChannelStore {
       throw new Error(`unknown channel: ${uri}`);
     }
     channel.state = reduce(channel.kind, channel.state, action);
+    this.mirrorChatSummary(action);
     this.seq += 1;
     const envelope: ActionEnvelope = { channel: uri, action, serverSeq: this.seq, origin };
     this.ring.push(envelope);
@@ -168,6 +169,19 @@ export class ChannelStore {
       }
     }
     return envelope;
+  }
+
+  // A chat's state repeats its summary's fields, so a summary change announced on the session reaches the chat's snapshot too.
+  private mirrorChatSummary(action: StateAction): void {
+    if (action.type !== "session/chatUpdated") {
+      return;
+    }
+    const chat = this.channels.get(action.chat);
+    if (chat?.kind !== "chat") {
+      return;
+    }
+    const { resource: _resource, ...changes } = action.changes as { resource?: string };
+    chat.state = { ...(chat.state as ChatState), ...changes };
   }
 
   // Replays only when the ring still covers the gap and no channel was recreated since.

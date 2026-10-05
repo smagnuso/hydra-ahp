@@ -676,14 +676,12 @@ export class SessionBridge implements SessionListener {
     if (!title || !state) {
       return;
     }
-    if (!catalog.isDefaultMember(hydraId)) {
-      const held = state.chats.find((entry) => entry.resource === chatUri);
-      if (held && held.title !== title) {
-        core.publish(sessionUri, action({ type: "session/chatUpdated", chat: chatUri, changes: { title } }));
-      }
-      return;
+    // VS Code titles a chat's tab from its chat state, which only session/chatUpdated naming the chat changes.
+    const held = state.chats.find((entry) => entry.resource === chatUri);
+    if (held && held.title !== title) {
+      core.publish(sessionUri, action({ type: "session/chatUpdated", chat: chatUri, changes: { title } }));
     }
-    if (state.title !== title) {
+    if (catalog.isDefaultMember(hydraId) && state.title !== title) {
       core.publish(sessionUri, action({ type: "session/titleChanged", title }));
     }
   }

@@ -354,6 +354,9 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     harness.hydra.listener!.update({ update: { sessionUpdate: "session_info_update", title: "Renamed live" } });
     await session.waitFor((e) => e.action.type === "session/titleChanged");
     expect((harness.core.store.state(SESSION) as SessionState).title).toBe("Renamed live");
+    const announced = await session.waitFor((e) => e.action.type === "session/chatUpdated");
+    expect(announced.action).toMatchObject({ chat: CHAT, changes: { title: "Renamed live" } });
+    expect((harness.core.store.state(CHAT) as { title: string }).title).toBe("Renamed live");
     harness.hydra.rows = [ROW({ title: "Renamed in Hydra", updatedAt: "2026-10-05T01:00:00.000Z" })];
     await sleep(300);
     expect((harness.core.store.state(SESSION) as SessionState).title).toBe("Renamed in Hydra");
