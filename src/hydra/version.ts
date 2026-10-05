@@ -1,7 +1,7 @@
-// 0.1.195 is the first release with /v1/sessions/:id/history/page, the newest
-// feature the bridge needs. The rest (extension_state, status=warm, since
-// cursors, afterSeq, _session/steering, /v1/system) all landed earlier.
-export const MIN_HYDRA_VERSION = "0.1.195";
+// 0.1.198 is the first release with createdAt on session rows (the session
+// changeset's base commit), patch tools in the session diff, and hydra-<name>
+// prefix elision (the /hydra ahp verbs).
+export const MIN_HYDRA_VERSION = "0.1.198";
 
 export function parseVersion(text: string): [number, number, number] | undefined {
   const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(text.trim());
@@ -34,7 +34,7 @@ export function checkHydraVersion(actual: string | undefined, minimum = MIN_HYDR
   }
   if (compareVersions(actual, minimum) < 0) {
     throw new Error(
-      `hydra-ahp needs Hydra ${minimum} or newer (history paging, extension state, incremental session lists); the daemon is ${actual}. Upgrade Hydra and restart.`,
+      `hydra-ahp needs Hydra ${minimum} or newer (session list createdAt, the hydra- prefix for its commands); the daemon is ${actual}. Upgrade Hydra and restart.`,
     );
   }
 }

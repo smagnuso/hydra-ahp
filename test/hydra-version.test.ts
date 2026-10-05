@@ -14,12 +14,12 @@ describe("hydra version gate", () => {
 
   it("accepts the minimum and newer", () => {
     expect(() => checkHydraVersion(MIN_HYDRA_VERSION)).not.toThrow();
-    expect(() => checkHydraVersion("0.1.197")).not.toThrow();
+    expect(() => checkHydraVersion("0.1.199")).not.toThrow();
     expect(() => checkHydraVersion("1.0.0")).not.toThrow();
   });
 
   it("refuses older and unknown versions with a clear message", () => {
-    expect(() => checkHydraVersion("0.1.194")).toThrow(/needs Hydra 0\.1\.195 or newer.*0\.1\.194/);
+    expect(() => checkHydraVersion("0.1.197")).toThrow(/needs Hydra 0\.1\.198 or newer.*0\.1\.197/);
     expect(() => checkHydraVersion(undefined)).toThrow(/could not determine/);
     expect(() => checkHydraVersion("banana")).toThrow(/could not determine/);
   });
@@ -51,7 +51,7 @@ describe("hydra version gate", () => {
           },
           "0.0.0",
         ),
-      ).rejects.toThrow(/needs Hydra 0\.1\.195 or newer.*0\.1\.100/);
+      ).rejects.toThrow(/needs Hydra 0\.1\.198 or newer.*0\.1\.100/);
     } finally {
       server.close();
     }
