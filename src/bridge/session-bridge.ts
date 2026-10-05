@@ -24,8 +24,6 @@ const INITIAL_TURNS = 20;
 const SETTLE_WAIT_MS = 500;
 const ECHO_WAIT_MS = 5_000;
 const STEER_RETRY_MS = 500;
-// Events held while a steer is in flight are let through after this even if Hydra never answers it.
-const STEER_HOLD_MS = 5_000;
 
 // A prompt this bridge sent to Hydra. Hydra never echoes its own prompt_received or turn_complete to the sender.
 interface OwnEntry {
@@ -142,7 +140,8 @@ export class SessionBridge implements SessionListener {
   private unlisten: (() => void) | undefined;
   private buffering: Pending[] | undefined;
   // Hydra's events while our own steer is in flight: the agent's answer can come before Hydra's reply, so it waits for the split.
-  private steerHold: { events: Pending[]; timer: NodeJS.Timeout } | undefined;
+  // Held until the reply, which Hydra sends at once; a lost connection fails the request and releases them too.
+  private steerHold: { events: Pending[]; released: Promise<void>; release: () => void } | undefined;
   private highWater: number | undefined;
   private sawClosed = false;
   private chain: Promise<unknown> = Promise.resolve();
@@ -818,6 +817,8 @@ export class SessionBridge implements SessionListener {
   }
 
   private async decide(channel: string, next: StateAction): Promise<ActionDecision> {
+    // A held turn end or start would make this decision on a stale turn: a cancel could reach the turn after it.
+    await this.steerHold?.released;
     const body = next as unknown as Json;
     if (channel === this.deps.sessionUri) {
       if (next.type === "session/titleChanged") {
@@ -1156,8 +1157,11 @@ export class SessionBridge implements SessionListener {
   // detached is already covered by _hydra_turn_started; injected is never echoed to the steering client.
   private holdForSteer(): void {
     this.releaseSteerHold();
-    this.steerHold = { events: [], timer: setTimeout(() => this.releaseSteerHold(), STEER_HOLD_MS) };
-    this.steerHold.timer.unref();
+    let release = (): void => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.steerHold = { events: [], released, release };
   }
 
   private releaseSteerHold(): void {
@@ -1166,10 +1170,10 @@ export class SessionBridge implements SessionListener {
       return;
     }
     this.steerHold = undefined;
-    clearTimeout(hold.timer);
     for (const event of hold.events) {
       this.deliver(event);
     }
+    hold.release();
   }
 
   private steered(steer: HeldSteer, entry: OwnEntry, result: SteeringResult): void {

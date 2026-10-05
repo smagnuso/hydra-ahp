@@ -127,6 +127,33 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
     ]);
   });
 
+  it("decides a cancel on the turns Hydra reported while a steer was in flight, so it never reaches the next turn", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open();
+    hydra(agentStarted("a1"), 1_000);
+    await session.waitFor((envelope) => envelope.action.type === "chat/turnStarted");
+    let reply = (_result: { outcome: string }): void => undefined;
+    harness.hydra.sessions.steer = () =>
+      new Promise((resolve) => {
+        reply = resolve as typeof reply;
+      });
+    await dispatch(session, {
+      type: "chat/pendingMessageSet",
+      kind: "steering",
+      id: "s1",
+      message: { text: "change course", origin: { kind: "user" } },
+    });
+    hydra(agentEnded("a1", 400), 1_400);
+    hydra(agentStarted("a2"), 1_500);
+
+    const cancelled = dispatch(session, { type: "chat/turnCancelled", turnId: "a1", duration: 1 });
+    await sleep(50);
+    reply({ outcome: "promptRequired" });
+    expect((await cancelled).rejectionReason).toBeDefined();
+    await sleep(50);
+    expect(harness.hydra.writes.map((write) => write.method)).not.toContain("session/cancel");
+  });
+
   it("refuses to cancel a turn that is not running and sends Hydra no cancel", async () => {
     harness = await startBridgeHarness();
     const { session } = await open();
