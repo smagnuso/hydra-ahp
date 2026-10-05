@@ -56,6 +56,24 @@ describe.each(["0.9.0", "1.0.0"])("protocol at %s", (version) => {
     expect(active()).toEqual([]);
   });
 
+  it("refuses an active entry change for another client", async () => {
+    await session.client.initialize({ clientId: "ca", protocolVersions: offers() });
+    await session.client.subscribe(SESSION);
+    const set = session.client.dispatch(
+      SESSION,
+      act({ type: "session/activeClientSet", activeClient: { clientId: "someone-else", displayName: "x", tools: [] } }),
+    );
+    expect((await session.waitFor((e) => e.origin?.clientSeq === set.clientSeq, 2000)).rejectionReason).toBe("a client can only change its own active entry");
+    const own = session.client.dispatch(
+      SESSION,
+      act({ type: "session/activeClientSet", activeClient: { clientId: "ca", displayName: "a", tools: [] } }),
+    );
+    expect((await session.waitFor((e) => e.origin?.clientSeq === own.clientSeq, 2000)).rejectionReason).toBeUndefined();
+    const removed = session.client.dispatch(SESSION, act({ type: "session/activeClientRemoved", clientId: "someone-else" }));
+    expect((await session.waitFor((e) => e.origin?.clientSeq === removed.clientSeq, 2000)).rejectionReason).toBe("a client can only change its own active entry");
+    expect((harness.core.store.state(SESSION) as SessionState).activeClients.map((c) => c.clientId)).toEqual(["ca"]);
+  });
+
   it("negotiates the version and serves initial snapshots", async () => {
     const result = await session.client.initialize({
       clientId: "c1",

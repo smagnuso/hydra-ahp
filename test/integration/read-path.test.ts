@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ChatState, Snapshot } from "@microsoft/agent-host-protocol";
+import type { ChatState, SessionState, Snapshot } from "@microsoft/agent-host-protocol";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { ReducerOracle } from "../support/oracle.js";
 import { openSession } from "../support/harness.js";
@@ -67,7 +67,7 @@ describe("read path against a scratch daemon", () => {
     const sessionUri = `ahp-session:/${id}`;
     const { clientSeq } = ahp.session.client.dispatch(sessionUri, {
       type: "session/activeClientSet",
-      activeClient: { clientId: "tester", displayName: "tester", tools: [] },
+      activeClient: { clientId: ahp.clientId, displayName: "tester", tools: [] },
     } as never);
     const echo = await ahp.session.waitFor((e) => e.origin?.clientSeq === clientSeq, 5000);
     expect(echo.rejectionReason).toBeUndefined();
@@ -116,6 +116,22 @@ describe("read path against a scratch daemon", () => {
     const again = await ahp.session.client.subscribe(`ahp-chat:/${id}`);
     const fresh = (again.result.snapshot as Snapshot).state as ChatState;
     expect(fresh.turns.map((t) => ({ ...t, usage: undefined }))).toEqual(chat.turns.map((t) => ({ ...t, usage: undefined })));
+  });
+
+  it("serves the current activity from a session channel nobody was watching", async () => {
+    const id = await prompted("ping");
+    const uri = `ahp-session:/${id}`;
+    const statusNow = async (): Promise<number> => {
+      const sub = await ahp.session.client.subscribe(uri);
+      const status = (sub.result.snapshot as Snapshot).state as SessionState;
+      await ahp.session.client.unsubscribe(uri);
+      return status.status ?? 0;
+    };
+    expect((await statusNow()) & 8).toBe(0);
+    const turn = driver.prompt(id, "script:slow");
+    await until("session reads as running", async () => (((await statusNow()) & 8) === 8 ? true : undefined));
+    await turn;
+    await until("session reads as idle again", async () => (((await statusNow()) & 8) === 0 ? true : undefined));
   });
 
   it("opens an active turn when a client subscribes while the turn is already running", async () => {

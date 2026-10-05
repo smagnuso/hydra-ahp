@@ -119,6 +119,7 @@ export const ROOT = "ahp-root://";
 export interface AhpConnection {
   session: Session;
   token: string;
+  clientId: string;
   root: RootState;
 }
 
@@ -140,11 +141,12 @@ export async function connectAhp(
   const entry = JSON.parse(match[0]) as { address: string; connectionToken: string };
   const session = await openSession(`ws://${entry.address}/?tkn=${encodeURIComponent(entry.connectionToken)}`);
   const offered = options.version === "1.0.0" ? ["1.0.0", "0.9.0"] : ["0.10.0", "0.9.0", "0.7.0"];
+  const clientId = `test-${Math.random().toString(16).slice(2)}`;
   const result = await session.client.initialize({
-    clientId: `test-${Math.random().toString(16).slice(2)}`,
+    clientId,
     protocolVersions: offered,
     initialSubscriptions: [ROOT],
   });
   const root = result.snapshots.find((s) => s.resource === ROOT)?.state as RootState;
-  return { session, token: entry.connectionToken, root };
+  return { session, token: entry.connectionToken, clientId, root };
 }

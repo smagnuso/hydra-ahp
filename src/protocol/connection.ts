@@ -246,6 +246,10 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
       refuse(first);
       return;
     }
+    if (activeClientOwner(typed) !== undefined && activeClientOwner(typed) !== connection.clientId) {
+      refuse("a client can only change its own active entry");
+      return;
+    }
     let decision: ActionDecision;
     try {
       decision = await core.backend.handleAction({
@@ -273,6 +277,13 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
     }
     core.publish(channel, typed, origin);
     trackActiveClient(channel, typed);
+  }
+
+  function activeClientOwner(next: StateAction): string | undefined {
+    if (next.type === "session/activeClientSet") {
+      return next.activeClient.clientId;
+    }
+    return next.type === "session/activeClientRemoved" ? next.clientId : undefined;
   }
 
   function trackActiveClient(channel: string, next: StateAction): void {
