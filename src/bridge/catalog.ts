@@ -34,7 +34,6 @@ export interface CatalogOptions {
   agentsEveryPolls?: number;
   // Advertise each local session's uncommitted changes; the backend must serve them.
   changesets?: boolean;
-  unpromptedGraceMs?: number;
 }
 
 type Json = Record<string, unknown>;
@@ -51,7 +50,6 @@ function remoteOwner(entry: HydraSessionEntry): string | undefined {
 }
 
 const action = (value: Json) => value as never;
-const UNPROMPTED_GRACE_MS = 60_000;
 
 // Mirrors Hydra's session list into the AHP root channel and answers listSessions from it.
 export class Catalog {
@@ -73,9 +71,6 @@ export class Catalog {
   private readonly flagWrites = new Map<string, Promise<void>>();
   private readonly published = new Map<string, SessionSummary>();
   private readonly pendingCreations = new Set<string>();
-  // When a client last had each unprompted session the extension created open; a restart counts as a sighting.
-  private readonly watchedAt = new Map<string, number>();
-  private readonly startedMs = Date.now();
   private readonly changeListeners = new Set<() => void>();
   private cursor: number | undefined;
   private polls = 0;
@@ -369,7 +364,6 @@ export class Catalog {
     this.chatStamps.delete(id);
     this.liveConfigs.delete(id);
     this.lookedUp.delete(id);
-    this.watchedAt.delete(id);
   }
 
   private async lookUpStamps(): Promise<void> {
@@ -418,28 +412,16 @@ export class Catalog {
     this.options.flags?.forget(hydraId);
   }
 
-  // Hydra's default list shows interactive sessions; the extension adds the ones it created, listing one nobody has prompted
-  // yet only while a client has it open.
+  // Hydra's default list shows interactive sessions; the extension adds the ones it created.
   isListed(hydraId: string): boolean {
     const entry = this.entries.get(hydraId);
     if (!entry) {
       return false;
     }
-    if (!this.stamps.has(hydraId)) {
-      return entry.interactive === true && !entry.parentSessionId;
-    }
-    // Forks and side chats start out non-interactive in Hydra, so a stamped session counts once it has been prompted.
-    return entry.interactive === true || this.recentlyWatched(hydraId);
-  }
-
-  // VS Code drops and retakes subscriptions in bursts, so an unprompted session outlives its last watcher by a grace.
-  private recentlyWatched(hydraId: string): boolean {
-    const now = Date.now();
-    if (this.core?.hasSubscribers(this.groupOf(hydraId)) || this.core?.hasSubscribers(this.chatOf(hydraId))) {
-      this.watchedAt.set(hydraId, now);
+    if (this.stamps.has(hydraId)) {
       return true;
     }
-    return now - (this.watchedAt.get(hydraId) ?? this.startedMs) < (this.options.unpromptedGraceMs ?? UNPROMPTED_GRACE_MS);
+    return entry.interactive === true && !entry.parentSessionId;
   }
 
   summaries(): SessionSummary[] {
@@ -673,7 +655,6 @@ export class Catalog {
 
   claim(hydraId: string, uri: string, entry: HydraSessionEntry): void {
     this.stamps.set(hydraId, uri);
-    this.watchedAt.set(hydraId, Date.now());
     this.lookedUp.add(hydraId);
     this.entries.set(hydraId, entry);
     this.pendingCreations.delete(uri);
@@ -692,7 +673,6 @@ export class Catalog {
   // Adds a Hydra session to an existing AHP session as one more chat.
   claimChat(hydraId: string, sessionUri: string, chat: string, at: number, entry: HydraSessionEntry, side?: SideOrigin): void {
     this.stamps.set(hydraId, sessionUri);
-    this.watchedAt.set(hydraId, Date.now());
     this.chatStamps.set(hydraId, { chat, at, ...(side ? { side } : {}) });
     this.lookedUp.add(hydraId);
     this.entries.set(hydraId, entry);
