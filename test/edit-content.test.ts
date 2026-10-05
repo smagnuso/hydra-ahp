@@ -57,6 +57,35 @@ describe("edits in tool results", () => {
   });
 });
 
+describe("multi-file patches", () => {
+  it("unfold each file's hunks into a fileEdit ahead of the tool's text", () => {
+    const patch = ["Index: /r/a.ts", "--- /r/a.ts", "+++ /r/a.ts", "@@ -1,2 +1,3 @@", " keep", "-old", "+new", "+more", "\\ No newline at end of file"].join("\n");
+    const { store, content } = mapped({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc5",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "Success." } }],
+      rawOutput: {
+        output: "Success.",
+        metadata: {
+          files: [
+            { filePath: "/r/a.ts", type: "update", patch },
+            { filePath: "/r/b.ts", type: "add", patch: "@@ -0,0 +1 @@\n+hi" },
+            { filePath: "/r/c.ts", type: "update", patch: { __hydraBlob: "abc", bytes: 9 } },
+          ],
+        },
+      },
+      _meta: { "hydra-acp": { editStats: [{ path: "/r/a.ts", added: 2, removed: 1 }] } },
+    });
+    expect(content.map((block) => block.type)).toEqual(["fileEdit", "fileEdit", "text"]);
+    expect(content[0]).toMatchObject({ diff: { added: 2, removed: 1 } });
+    expect(store.read(editContentUri(CHAT, "tc5", 0, "old"), undefined)).toMatchObject({ data: "keep\nold\n" });
+    expect(store.read(editContentUri(CHAT, "tc5", 0, "new"), undefined)).toMatchObject({ data: "keep\nnew\nmore\n" });
+    expect(content[1]?.before).toBeUndefined();
+    expect(content[1]).toMatchObject({ after: { uri: "file:///r/b.ts" }, diff: { added: 1, removed: 0 } });
+  });
+});
+
 describe("edits awaiting confirmation", () => {
   it("are previewed on the ready, under the title the agent settled on", () => {
     const store = new EditContentStore();

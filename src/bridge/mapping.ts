@@ -12,6 +12,7 @@ import {
 } from "./turns.js";
 import { editContentUri } from "./edit-content.js";
 import { cwdToUri } from "./ids.js";
+import { patchedFiles } from "./patch.js";
 
 export interface Frame {
   update: Json;
@@ -76,7 +77,7 @@ function diffText(path: string, oldText: string, newText: string): string {
 }
 
 function countLines(value: string): number {
-  return value === "" ? 0 : value.split("\n").length;
+  return value === "" ? 0 : value.split("\n").length - (value.endsWith("\n") ? 1 : 0);
 }
 
 // The line counts the daemon recorded for each edit an update carries, in order.
@@ -106,12 +107,21 @@ function plainEdit(path: string, before: string | undefined, after: string): Jso
 
 function contentBlocks(update: Json, edit?: EditBlock): Json[] {
   const blocks: Json[] = [];
-  const content = update.content;
-  if (!Array.isArray(content)) {
-    return blocks;
-  }
   const stats = editStatsOf(update);
   const seen = new Map<string, number>();
+  const counted = (path: string): { added: number; removed: number } | undefined => {
+    const occurrence = seen.get(path) ?? 0;
+    seen.set(path, occurrence + 1);
+    const counts = stats.filter((s) => s.path === path)[occurrence];
+    return counts && { added: counts.added, removed: counts.removed };
+  };
+  const content = Array.isArray(update.content) ? update.content : [];
+  if (!content.some((raw) => bag(raw).type === "diff")) {
+    for (const file of patchedFiles(update)) {
+      const before = file.created ? undefined : file.oldText;
+      blocks.push(edit ? edit(file.path, before, file.newText, counted(file.path)) : plainEdit(file.path, before, file.newText));
+    }
+  }
   for (const raw of content) {
     const entry = bag(raw);
     if (entry.type === "content") {
@@ -123,10 +133,7 @@ function contentBlocks(update: Json, edit?: EditBlock): Json[] {
       const path = entry.path;
       const before = typeof entry.oldText === "string" ? entry.oldText : undefined;
       const after = typeof entry.newText === "string" ? entry.newText : "";
-      const occurrence = seen.get(path) ?? 0;
-      seen.set(path, occurrence + 1);
-      const counts = stats.filter((s) => s.path === path)[occurrence];
-      blocks.push(edit ? edit(path, before, after, counts && { added: counts.added, removed: counts.removed }) : plainEdit(path, before, after));
+      blocks.push(edit ? edit(path, before, after, counted(path)) : plainEdit(path, before, after));
     }
   }
   return blocks;
