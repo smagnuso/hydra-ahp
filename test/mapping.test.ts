@@ -161,4 +161,37 @@ describe("chat mapping", () => {
     const actions = mapper.closeActive("cancelled", 1_000_050);
     expect(actions[0]).toMatchObject({ type: "chat/turnCancelled" });
   });
+
+  it("splits the running turn at a steer so the steering message shows", () => {
+    const steered = frame({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "go left" }, _meta: { "hydra-acp": { steered: true } } });
+    const { state } = foldRecorded([prompt("m1", "go"), say("working "), steered, say("turning"), done()]);
+    expect(state.turns.map((turn) => [turn.message.text, turn.state])).toEqual([
+      ["go", "complete"],
+      ["go left", "complete"],
+    ]);
+    expect(state.turns.map((turn) => turn.responseParts.map((part) => (part as { content?: string }).content))).toEqual([["working "], ["turning"]]);
+  });
+
+  it("ends a steered split when Hydra ends the turn it started", () => {
+    const mapper = new ChatMapper();
+    mapper.map(frame({ sessionUpdate: "_hydra_turn_started", messageId: "auto1" }));
+    mapper.steer("s", 5, { text: "go left", origin: { kind: "user" } });
+    expect(mapper.activeOriginId).toBe("auto1");
+    const ended = mapper.map(frame({ sessionUpdate: "_hydra_turn_ended", messageId: "e", startedMessageId: "auto1", _meta: { "hydra-acp": { reason: "completed" } } }));
+    expect(ended).toContainEqual(expect.objectContaining({ type: "chat/turnComplete", turnId: "s" }));
+    expect(mapper.activeTurnId).toBeUndefined();
+  });
+
+  it("holds a steer back while a confirmation is waiting in the turn", () => {
+    const mapper = new ChatMapper();
+    mapper.map(prompt());
+    mapper.map(call({ status: "pending" }));
+    mapper.confirmationReady({ toolCallId: "c1", title: "Run" }, []);
+    expect(mapper.steer("s", 5, { text: "go left", origin: { kind: "user" } }, "p1")).toEqual([]);
+    mapper.noteConfirmed("c1");
+    const next = mapper.map(change({ status: "completed" }));
+    expect(next.map((action) => action.type)).toContain("chat/turnStarted");
+    expect(next.find((action) => action.type === "chat/turnStarted")).toMatchObject({ turnId: "s", queuedMessageId: "p1" });
+    expect(mapper.activeOriginId).toBe("m1");
+  });
 });

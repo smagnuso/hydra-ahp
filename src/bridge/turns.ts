@@ -28,6 +28,8 @@ export interface TurnContext {
   parts: PartRef[];
   calls: Map<string, Call>;
   waiting?: string;
+  // The turn Hydra is still running when this one was split off it by a steer.
+  origin?: string;
 }
 
 export function bag(value: unknown): Json {

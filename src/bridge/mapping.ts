@@ -138,7 +138,7 @@ export class ChatMapper {
   private readonly clock: () => number;
   // Set once a turn was ended here ahead of Hydra, so its trailing frames do not open an orphan turn.
   private silenced = false;
-  steeringId: string | undefined;
+  private deferredSteer: { turnId: string; message: Json; pendingId?: string } | undefined;
   // Hydra messageIds of turns AHP clients started, mapped to the client's turnId.
   readonly aliases = new Map<string, string>();
 
@@ -148,6 +148,11 @@ export class ChatMapper {
 
   get activeTurnId(): string | undefined {
     return this.turn?.id;
+  }
+
+  // The turn Hydra knows the active one as, which a steer split leaves behind.
+  get activeOriginId(): string | undefined {
+    return this.turn?.origin ?? this.turn?.id;
   }
 
   get activeStartedMs(): number | undefined {
@@ -163,6 +168,16 @@ export class ChatMapper {
     if (frame.recordedAt !== undefined) {
       this.lastAt = Math.max(this.lastAt, frame.recordedAt);
     }
+    const actions = this.mapUpdate(frame, at);
+    const deferred = this.deferredSteer;
+    if (!deferred || (this.turn && this.awaitingAnswer())) {
+      return actions;
+    }
+    this.deferredSteer = undefined;
+    return [...actions, ...this.steer(deferred.turnId, at, deferred.message, deferred.pendingId)];
+  }
+
+  private mapUpdate(frame: Frame, at: number): Json[] {
     const update = frame.update;
     const kind = text(update.sessionUpdate) ?? text(update.kind);
     if (this.silenced && !this.turn) {
@@ -329,6 +344,28 @@ export class ChatMapper {
     return this.start(turnId, startedMs, message, queuedMessageId);
   }
 
+  // AHP has no place for a message inside a turn, so a steer completes the running turn and opens one carrying it,
+  // as VS Code's own host does; pendingId is the steering chip the new turn consumes.
+  steer(turnId: string, at: number, message: Json, pendingId?: string): Json[] {
+    // Ending the turn now would strand a confirmation in it, so the split waits for the answer.
+    if (this.awaitingAnswer()) {
+      this.deferredSteer = { turnId, message, pendingId };
+      return NO_ACTIONS;
+    }
+    const previous = this.turn;
+    const actions = previous ? this.end("end_turn", at) : [];
+    actions.push(...this.start(turnId, at, message, pendingId));
+    if (previous) {
+      (this.turn as TurnContext).origin = previous.origin ?? previous.id;
+      return actions;
+    }
+    return [...actions, ...this.end("end_turn", at)];
+  }
+
+  private awaitingAnswer(): boolean {
+    return [...(this.turn?.calls.values() ?? [])].some((call) => call.asked && !call.readied && !call.finished);
+  }
+
   // A client's chat/turnCancelled ends the turn in AHP; closes the plan and drops what Hydra still sends for it.
   endLocal(turnId: string, atMs: number): Json[] {
     if (this.turn?.id !== turnId) {
@@ -347,6 +384,11 @@ export class ChatMapper {
   private start(id: string, startedMs: number, message: Json, queuedMessageId?: string): Json[] {
     this.silenced = false;
     const actions = this.turn ? this.end("cancelled", startedMs) : [];
+    const deferred = this.deferredSteer;
+    this.deferredSteer = undefined;
+    if (deferred) {
+      actions.push(...this.steer(deferred.turnId, startedMs, deferred.message, deferred.pendingId));
+    }
     this.turn = openTurn(id, startedMs);
     actions.push({
       type: "chat/turnStarted",
@@ -381,19 +423,11 @@ export class ChatMapper {
     if (meta.compatFor === "prompt_received") {
       return NO_ACTIONS;
     }
-    if (meta.steered === true) {
-      if (!this.steeringId) {
-        return NO_ACTIONS;
-      }
-      const id = this.steeringId;
-      this.steeringId = undefined;
-      return [{ type: "chat/pendingMessageRemoved", kind: "steering", id }];
-    }
-    if (this.turn) {
-      return NO_ACTIONS;
-    }
     const body = text(bag(update.content).text);
-    if (!body) {
+    if (meta.steered === true) {
+      return body ? this.steer(`steer-${frame.seq ?? at}`, at, messageOf(body, "user")) : NO_ACTIONS;
+    }
+    if (this.turn || !body) {
       return NO_ACTIONS;
     }
     return this.start(`user-${frame.seq ?? at}`, at, messageOf(body, "user"));
@@ -626,7 +660,7 @@ export class ChatMapper {
 
   private hydraTurnEnded(update: Json, at: number): Json[] {
     const started = text(update.startedMessageId);
-    if (started !== undefined && this.turn && this.turn.id !== started) {
+    if (started !== undefined && this.turn && this.activeOriginId !== started) {
       return NO_ACTIONS;
     }
     const reason = text(bag(bag(update._meta)[HYDRA_META]).reason) ?? "completed";

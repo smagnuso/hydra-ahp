@@ -251,14 +251,17 @@ describe("write path against a scratch daemon", () => {
     await view.startTurn("ahp-steer", "script:wait");
     await view.until("agent waiting", (chat) => chat.activeTurn?.id === "ahp-steer" && markdown(chat.activeTurn.responseParts) === "waiting ");
     await view.dispatch({ type: "chat/pendingMessageSet", kind: "steering", id: "s1", message: user("go left") });
-    await view.until("steering consumed", () =>
-      view.envelopes("chat/pendingMessageRemoved").some((e) => (e.action as { kind: string; id: string }).kind === "steering" && (e.action as { id: string }).id === "s1"),
-    );
-    const chat = await finished(view, "ahp-steer");
-    expect(chat.turns.map((turn) => turn.id)).toEqual([expect.any(String), "ahp-steer"]);
-    expect(chat.turns.at(-1)).toMatchObject({ state: "complete" });
-    expect(markdown(chat.turns.at(-1)!.responseParts)).toContain("steered:go left");
+    const chat = await finished(view, "steer-s1");
+    expect(chat.turns.map((turn) => [turn.id, turn.message.text, turn.state])).toEqual([
+      [expect.any(String), "ping", "complete"],
+      ["ahp-steer", "script:wait", "complete"],
+      ["steer-s1", "go left", "complete"],
+    ]);
+    expect(markdown(chat.turns[1]!.responseParts)).toBe("waiting ");
+    expect(markdown(chat.turns[2]!.responseParts)).toContain("steered:go left");
     expect(chat.steeringMessage).toBeUndefined();
+    const started = view.envelopes("chat/turnStarted").map((e) => e.action as { turnId: string; queuedMessageId?: string });
+    expect(started.find((next) => next.turnId === "steer-s1")?.queuedMessageId).toBe("s1");
     expect(await driver.agentLog(view.id)).toContain("steer:go left");
   });
 
@@ -293,10 +296,14 @@ describe("write path against a scratch daemon", () => {
     expect((await daemon.admin.getSession(view.id)).busy).toBeFalsy();
 
     await view.startTurn("ahp-next", "script:wait");
-    const chat = await finished(view, "ahp-next");
+    const chat = await finished(view, "steer-s1");
+    expect(chat.turns.map((turn) => [turn.message.text, turn.state])).toEqual([
+      ["ping", "complete"],
+      ["script:wait", "complete"],
+      ["go up", "complete"],
+    ]);
     expect(markdown(chat.turns.at(-1)!.responseParts)).toContain("steered:go up");
     expect(chat.steeringMessage).toBeUndefined();
-    expect(chat.turns).toHaveLength(2);
     const log = await driver.agentLog(view.id);
     expect(log.slice(1, 3)).toEqual(["prompt:script:wait", "steer:go up"]);
   });

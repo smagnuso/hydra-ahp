@@ -1103,6 +1103,10 @@ export class SessionBridge implements SessionListener {
     this.dropSend(entry);
     // The reply can beat the client's own pendingMessageSet into the chat, so look for the chip once that has landed.
     setImmediate(() => {
+      // Hydra does not echo an injected steer to the client that sent it, so the turn carrying it is announced here.
+      if (result.outcome === "injected") {
+        this.publish(this.mapper.steer(`steer-${steer.id}`, Date.now(), steer.message, steer.id));
+      }
       if (this.chatState()?.steeringMessage?.id === steer.id) {
         this.publish([{ type: "chat/pendingMessageRemoved", kind: "steering", id: steer.id }]);
       }
@@ -1199,7 +1203,7 @@ export class SessionBridge implements SessionListener {
       }
       return;
     }
-    if (this.mapper.activeTurnId !== turnId) {
+    if (this.mapper.activeOriginId !== turnId) {
       if (!this.mapper.activeTurnId) {
         this.mapper.unsilence();
       }
