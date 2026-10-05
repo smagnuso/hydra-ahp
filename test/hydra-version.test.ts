@@ -45,6 +45,7 @@ describe("hydra version gate", () => {
             warmPollMs: undefined,
             debug: false,
             tokensPath: "/nonexistent/tokens.json",
+            flagsPath: "/nonexistent/flags.json",
           },
           "0.0.0",
         ),

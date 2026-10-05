@@ -1,10 +1,13 @@
 import type { SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
 import type { HydraSessionEntry } from "../hydra/rest.js";
+import { NO_FLAGS, type SessionFlags } from "../store/flags.js";
 import { chatUri, cwdToUri, isFederatedId, sessionKey } from "./ids.js";
 
 export const STATUS_IDLE = 1;
 export const STATUS_IN_PROGRESS = 8;
 export const STATUS_INPUT_NEEDED = 24;
+export const STATUS_IS_READ = 32;
+export const STATUS_IS_ARCHIVED = 64;
 
 export const UNTITLED = "Untitled session";
 
@@ -15,8 +18,19 @@ export function statusBits(entry: Pick<HydraSessionEntry, "busy" | "awaitingInpu
   return entry.busy ? STATUS_IN_PROGRESS : STATUS_IDLE;
 }
 
+export function withFlagBits(status: number, flags: SessionFlags): number {
+  let next = status & ~(STATUS_IS_READ | STATUS_IS_ARCHIVED);
+  if (flags.isRead) {
+    next |= STATUS_IS_READ;
+  }
+  if (flags.isArchived) {
+    next |= STATUS_IS_ARCHIVED;
+  }
+  return next;
+}
+
 // Federated rows are labelled with the remote's name through the project grouping.
-export function entryToSummary(entry: HydraSessionEntry, uri: string): SessionSummary {
+export function entryToSummary(entry: HydraSessionEntry, uri: string, flags: SessionFlags = NO_FLAGS): SessionSummary {
   const modifiedAt = entry.updatedAt ?? new Date(0).toISOString();
   const title = entry.title || UNTITLED;
   const chat = chatUri(sessionKey(uri));
@@ -25,7 +39,7 @@ export function entryToSummary(entry: HydraSessionEntry, uri: string): SessionSu
     resource: uri,
     provider: entry.agentId ?? "unknown",
     title,
-    status: statusBits(entry),
+    status: withFlagBits(statusBits(entry), flags),
     createdAt: entry.createdAt ?? modifiedAt,
     modifiedAt,
     chats: [{ resource: chat, title }],

@@ -1,6 +1,3 @@
-// Ports the update rules of ahpd's packages/agent-acp/src/mapping.ts (MIT): open a part before streaming into it,
-// hold whitespace-only runs, synthesize a start for an orphan tool_call_update, re-ready on late arguments, and
-// hold toolCallReady while a permission may still arrive.
 import {
   HYDRA_META,
   bag,

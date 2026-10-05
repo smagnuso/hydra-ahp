@@ -70,6 +70,20 @@ not appear in `hydra auth list`. Tokens renew themselves on use, so the VS Code
 setting never needs re-pasting unless the token sits unused for the idle window
 or you revoke it.
 
+### Getting a connection URL
+
+`hydra-ahp url [label] [--files scoped|read|full]` mints a token and prints
+the URL to paste into an AHP client, the same idea as `hydra-acp-browser url`.
+Each call mints a new token, because only hashes are stored.
+
+```
+hydra-ahp url laptop
+ws://127.0.0.1:55590?tkn=...
+```
+
+`token mint` prints the same URL under the settings entry, and
+`/hydra ahp token url` works from any Hydra client.
+
 The listener binds loopback only. Clients authenticate with `?tkn=<token>` or
 `Authorization: Bearer <token>`, and WebSocket upgrades from web page origins
 are refused.

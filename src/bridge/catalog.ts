@@ -6,6 +6,7 @@ import type { HydraAgent, HydraRest, HydraSessionEntry, SessionPage } from "../h
 import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
 import { chatKey, chatUri, isChatUri, isFederatedId, sessionKey, sessionUri } from "./ids.js";
+import { NO_FLAGS, type FlagStore, type SessionFlags } from "../store/flags.js";
 import { entryToSummary } from "./summary.js";
 
 const log = logger("catalog");
@@ -19,6 +20,7 @@ const STAMP_LOOKUP_CONCURRENCY = 8;
 export interface CatalogOptions {
   rest: HydraRest;
   extState: ExtensionState;
+  flags?: FlagStore;
   pollMs?: number;
   warmPollMs?: number;
   agentsEveryPolls?: number;
@@ -115,6 +117,19 @@ export class Catalog {
       return undefined;
     }
     return this.isListed(id) ? id : undefined;
+  }
+
+  flagsFor(hydraId: string): SessionFlags {
+    return this.options.flags?.get(hydraId) ?? NO_FLAGS;
+  }
+
+  // Persists a read or archive change and tells root subscribers; returns whether anything changed.
+  setFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
+    const changed = this.options.flags?.set(hydraId, patch) ?? false;
+    if (changed) {
+      this.reconcile();
+    }
+    return changed;
   }
 
   summaryFor(uri: string): SessionSummary | undefined {
@@ -229,6 +244,7 @@ export class Catalog {
 
   private drop(id: string): void {
     this.entries.delete(id);
+    this.options.flags?.forget(id);
     const uri = this.stamps.get(id);
     this.stamps.delete(id);
     this.lookedUp.delete(id);
@@ -288,7 +304,7 @@ export class Catalog {
         continue;
       }
       const uri = this.uriFor(id);
-      next.set(uri, entryToSummary(entry, uri));
+      next.set(uri, entryToSummary(entry, uri, this.flagsFor(id)));
       owners.set(uri, id);
     }
     for (const uri of this.pendingCreations) {

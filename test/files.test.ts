@@ -58,6 +58,7 @@ describe("file access", () => {
   let secret: string;
   let outside: string;
   let remoteCwd: string;
+  let remoteInPicker: string;
   let picker: string;
   let listener: AhpListener;
   let port: number;
@@ -72,7 +73,8 @@ describe("file access", () => {
     outside = join(dir, "outside");
     remoteCwd = join(dir, "remote-cwd");
     picker = join(dir, "picker");
-    for (const path of [join(proj, "src"), secret, outside, remoteCwd, join(picker, "sub"), join(picker, "other")]) {
+    remoteInPicker = join(picker, "other", "peer-proj");
+    for (const path of [join(proj, "src"), secret, outside, remoteCwd, join(picker, "sub"), remoteInPicker]) {
       mkdirSync(path, { recursive: true });
     }
     writeFileSync(join(proj, "src", "a.ts"), "export const a = 1;\n");
@@ -91,6 +93,7 @@ describe("file access", () => {
     const list: FileSession[] = [
       { id: "s1", cwd: proj },
       { id: "peer:x", cwd: remoteCwd, remote: "peer" },
+      { id: "peer:y", cwd: remoteInPicker, remote: "peer" },
     ];
     edited.record("s1", join(outside, "edited.txt"));
     const service = new FileService({
@@ -224,6 +227,12 @@ describe("file access", () => {
       expect(failed.code).toBe(DENIED);
       expect(failed.message).toContain('files live on "peer"');
       expect((await failure(client.resourceList({ uri: u(remoteCwd) }))).message).toContain("peer");
+    });
+
+    it("refuses a federated cwd that sits inside a directory root", async () => {
+      const failed = await failure(client.resourceList({ uri: u(remoteInPicker) }));
+      expect(failed.code).toBe(DENIED);
+      expect(failed.message).toContain('files live on "peer"');
     });
 
     it("lists directories only under a directory root", async () => {

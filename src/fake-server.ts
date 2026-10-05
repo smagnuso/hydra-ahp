@@ -7,7 +7,7 @@ import { ProtocolCore } from "./protocol/core.js";
 import { AhpListener } from "./server/listener.js";
 import { TokenRegistry, isFileLevel } from "./store/tokens.js";
 
-// Serves the in-memory fake backend so AHP clients (ahpc, VS Code) can be pointed at the protocol core.
+// Serves the in-memory fake backend so AHP clients can be pointed at the protocol core.
 async function main(): Promise<void> {
   const level = process.env.HYDRA_AHP_FILES ?? "scoped";
   if (!isFileLevel(level)) {

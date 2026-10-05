@@ -204,18 +204,18 @@ export class FileService {
     if (await this.edited.has(real)) {
       return { real, dirsOnly: false };
     }
-    for (const configured of this.dirRoots) {
-      const root = await realpathLoose(configured).catch(() => undefined);
-      if (root !== undefined && isInside(root, real)) {
-        return { real, dirsOnly: true };
-      }
-    }
     for (const session of sessions) {
       if (session.remote === undefined) {
         continue;
       }
       if (isInside(session.cwd, path) || isInside(session.cwd, real)) {
         throw new PathScopeError(`files live on "${session.remote}" and cannot be read from here`);
+      }
+    }
+    for (const configured of this.dirRoots) {
+      const root = await realpathLoose(configured).catch(() => undefined);
+      if (root !== undefined && isInside(root, real)) {
+        return { real, dirsOnly: true };
       }
     }
     throw new PathScopeError("path is outside the files this token may access");

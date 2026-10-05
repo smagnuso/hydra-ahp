@@ -21,6 +21,23 @@ describe("token verbs", () => {
     expect(tokens.validate(entry.connectionToken as string)?.level).toBe("read");
   });
 
+  it("mint also prints a ws url carrying the same token", () => {
+    const { run, tokens } = setup();
+    const reply = run("mint vscode");
+    const url = /ws:\/\/\S+/.exec(reply)?.[0] ?? "";
+    expect(url.startsWith("ws://127.0.0.1:55590?tkn=")).toBe(true);
+    expect(tokens.validate(decodeURIComponent(url.split("tkn=")[1] as string))?.label).toBe("vscode");
+  });
+
+  it("url mints a token and prints only the url, with a default label", () => {
+    const { run, tokens } = setup();
+    const reply = run("url --files read");
+    expect(reply).toMatch(/^ws:\/\/127\.0\.0\.1:55590\?tkn=\S+$/);
+    expect(tokens.list()[0]).toMatchObject({ label: "url", level: "read" });
+    run("url laptop");
+    expect(tokens.list().map((t) => t.label)).toContain("laptop");
+  });
+
   it("defaults to the scoped level and rejects bad input", () => {
     const { run, tokens } = setup();
     run("mint vscode");

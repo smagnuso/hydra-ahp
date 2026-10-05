@@ -4,18 +4,18 @@ export const COMMAND_VERB = "token";
 
 export const COMMAND_SPEC = {
   verb: COMMAND_VERB,
-  argsHint: "mint <label> [--files scoped|read|full] | list | revoke <id>",
+  argsHint: "mint <label> [--files scoped|read|full] | url [label] | list | revoke <id>",
   description: "Manage the AHP connection tokens (VS Code chat.remoteAgentHosts)",
 };
 
-const USAGE = `usage: token mint <label> [--files ${FILE_LEVELS.join("|")}] | token list | token revoke <id>`;
+const USAGE = `usage: token mint <label> [--files ${FILE_LEVELS.join("|")}] | token url [label] [--files ...] | token list | token revoke <id>`;
 
 export interface TokenCommandContext {
   tokens: TokenRegistry;
   address: () => string;
 }
 
-function parseMint(words: string[]): { label: string; level: FileLevel } | string {
+function parseMint(words: string[], defaultLabel?: string): { label: string; level: FileLevel } | string {
   const label: string[] = [];
   let level: FileLevel = "scoped";
   for (let i = 0; i < words.length; i += 1) {
@@ -36,10 +36,18 @@ function parseMint(words: string[]): { label: string; level: FileLevel } | strin
     }
     level = value;
   }
+  if (label.length === 0 && defaultLabel !== undefined) {
+    label.push(defaultLabel);
+  }
   if (label.length === 0) {
     return `a label is required\n${USAGE}`;
   }
   return { label: label.join(" "), level };
+}
+
+// The URL form carries the token as ?tkn=, like VS Code's transport.
+function connectUrl(address: string, token: string): string {
+  return `ws://${address}?tkn=${encodeURIComponent(token)}`;
 }
 
 // Runs one "token ..." invocation and returns the reply text.
@@ -58,7 +66,18 @@ export function runTokenCommand(context: TokenCommandContext, args: string): str
         `Minted token ${info.id} (${info.label}, files: ${info.level}). It is shown once. Add this to chat.remoteAgentHosts in VS Code and enable chat.remoteAgentHostsEnabled:`,
         "",
         JSON.stringify(entry, null, 2),
+        "",
+        "Or, as a URL for any AHP client:",
+        connectUrl(entry.address, token),
       ].join("\n");
+    }
+    case "url": {
+      const parsed = parseMint(words, "url");
+      if (typeof parsed === "string") {
+        return parsed;
+      }
+      const { token } = context.tokens.mint(parsed.label, parsed.level);
+      return connectUrl(context.address(), token);
     }
     case "list": {
       const rows = context.tokens.list();

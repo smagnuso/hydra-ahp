@@ -20,6 +20,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     runCli(argv.slice(1));
     return;
   }
+  if (argv[0] === "url") {
+    runCli(["url", ...argv.slice(1)]);
+    return;
+  }
   const app = await startApp(loadConfig(), VERSION);
   const shutdown = (): void => {
     void app.stop().finally(() => process.exit(0));

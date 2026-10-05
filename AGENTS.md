@@ -7,8 +7,8 @@ Brief for AI agents working in this repo.
 `hydra-ahp` (npm `@hydra-acp/ahp`) is an **extension** for Hydra that serves
 the [Agent Host Protocol (AHP)](https://github.com/microsoft/agent-host-protocol)
 so AHP clients can list, watch and drive Hydra sessions, live and shared with
-Hydra's other clients. The main target is VS Code's agent UI; ahpc and the
-official AHP SDK clients are secondary.
+Hydra's other clients. The main target is VS Code's agent UI; the official
+AHP SDK clients are secondary.
 
 The repo and bin are named `hydra-ahp`, deliberately not `hydra-acp-ahp`
 (which reads like a typo). The Hydra extension name is `ahp`, so slash
@@ -31,18 +31,26 @@ is a Hydra client downstream: `/acp` with the per-process extension token in
   transport cannot send headers) or `Authorization: Bearer`. Tokens come from
   this extension's own AHP-only registry, never Hydra's admin token.
 - The only runtime protocol dependency is `@microsoft/agent-host-protocol`
-  (types, reducers, version negotiation). ahpd is reference reading only;
-  credit it in a comment wherever logic is ported.
+  (types, reducers, version negotiation).
 - Federated sessions are first-class: ids stay `name:localId`.
 
 ## Layout
 
-- `src/index.ts`: entry point (`hydra-ahp` bin)
-
-Planned (see the plan, section 4): `server/` listener and auth, `rpc/` JSON-RPC
-peer, `protocol/` negotiation, channel store and replay, `bridge/` session
-mapping, `files/` resource commands, `hydra/` ACP and REST clients,
-`store/` token registry and flags.
+- `src/index.ts`: entry point (`hydra-ahp` bin); `src/app.ts` wires everything
+- `src/config.ts`: env and path config (`HYDRA_AHP_*`)
+- `src/server/`: loopback listener, token and Origin checks
+- `src/rpc/`: JSON-RPC peer
+- `src/protocol/`: negotiation, channel store and replay ring, connection,
+  dispatch validation and echo, fake backend for tests
+- `src/bridge/`: catalog poller, session bridges, update mapping, turn
+  tracking, prompt conversion, the backend tying them together
+- `src/files/`: `resource*` commands and `@` completions, gated by token level
+- `src/hydra/`: `/acp` client, REST client, `extension_state`, version check
+- `src/store/`: token registry (`tokens.json`) and read/archive flags
+  (`flags.json`), both 0600 under `<hydra home>/extensions/ahp/`
+- `src/commands/`: the `/hydra ahp token ...` verbs
+- `scripts/record-host.mjs`: frame-logging stub host for recon
+- `test/`: unit tests plus `test/integration/` against scratch daemons
 
 ## Build & test
 

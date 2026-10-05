@@ -9,7 +9,7 @@ import type { Catalog } from "./catalog.js";
 import { ChatMapper, type Frame } from "./mapping.js";
 import { UnsupportedContent, chooseOption, confirmationOptions, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
-import { STATUS_IDLE, summaryToSessionState } from "./summary.js";
+import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, summaryToSessionState, withFlagBits } from "./summary.js";
 import { HYDRA_META, bag, text, type Json } from "./turns.js";
 
 const log = logger("bridge");
@@ -334,8 +334,12 @@ export class SessionBridge implements SessionListener {
     }
 
     const summary = this.deps.catalog.summaryFor(this.deps.sessionUri);
-    const base = held ?? emptyChat(chatUri, summary?.title ?? "", summary?.modifiedAt ?? new Date(0).toISOString(), STATUS_IDLE);
+    const base = held ?? emptyChat(chatUri, summary?.title ?? "", summary?.modifiedAt ?? new Date(0).toISOString(), withFlagBits(STATUS_IDLE, this.deps.catalog.flagsFor(this.deps.hydraId)));
     const plan = this.reconcilePlan(base, produced, cursor);
+    // Replaying turns clears the read bit in the official reducers; the stored mark survives a replay.
+    if (this.deps.catalog.flagsFor(this.deps.hydraId).isRead) {
+      plan.push({ type: "chat/isReadChanged", isRead: true });
+    }
     if (subscribed) {
       this.publish(plan);
     } else {
@@ -481,6 +485,24 @@ export class SessionBridge implements SessionListener {
     this.maybeSteer();
   }
 
+  // Read and archive marks are one pair per session; the session and chat channels mirror each other.
+  private setFlag(origin: string, flag: "isRead" | "isArchived", body: Json): ActionDecision {
+    if (typeof body[flag] !== "boolean") {
+      return refuse(`${flag} must be a boolean`);
+    }
+    const value = body[flag] as boolean;
+    const { core, catalog, hydraId, sessionUri, chatUri } = this.deps;
+    catalog.setFlags(hydraId, { [flag]: value });
+    const bit = flag === "isRead" ? STATUS_IS_READ : STATUS_IS_ARCHIVED;
+    for (const [channel, kind] of [[sessionUri, "session"], [chatUri, "chat"]] as const) {
+      const state = core.store.state(channel) as { status?: number } | undefined;
+      if (channel !== origin && state && (((state.status ?? 0) & bit) !== 0) !== value) {
+        core.publish(channel, action({ type: `${kind}/${flag}Changed`, [flag]: value }));
+      }
+    }
+    return ACCEPT;
+  }
+
   private applyTitle(title: string | undefined): void {
     const { core, sessionUri } = this.deps;
     const state = core.store.state(sessionUri) as SessionState | undefined;
@@ -501,9 +523,24 @@ export class SessionBridge implements SessionListener {
     for (const next of actions) {
       core.publish(chatUri, action(next));
     }
+    this.settleRead();
     this.sweepParked();
     this.syncChatSummary();
     this.syncInputNeeded();
+  }
+
+  // New activity clears the chat's read bit in the official reducers, so the stored mark follows it.
+  private settleRead(): void {
+    const { core, catalog, hydraId, sessionUri, chatUri } = this.deps;
+    const chat = core.store.state(chatUri) as ChatState | undefined;
+    if (!chat || (chat.status & STATUS_IS_READ) !== 0 || !catalog.flagsFor(hydraId).isRead) {
+      return;
+    }
+    catalog.setFlags(hydraId, { isRead: false });
+    const session = core.store.state(sessionUri) as SessionState | undefined;
+    if (session && (session.status & STATUS_IS_READ) !== 0) {
+      core.publish(sessionUri, action({ type: "session/isReadChanged", isRead: false }));
+    }
   }
 
   // Mirrors the chat's status and modification time into the session's chat catalog entry.
@@ -578,9 +615,15 @@ export class SessionBridge implements SessionListener {
       if (next.type === "session/titleChanged") {
         return this.retitle(text(body.title) ?? "");
       }
+      if (next.type === "session/isReadChanged" || next.type === "session/isArchivedChanged") {
+        return this.setFlag(channel, next.type.endsWith("isReadChanged") ? "isRead" : "isArchived", body);
+      }
       return refuse("this host does not accept that action");
     }
     switch (next.type) {
+      case "chat/isReadChanged":
+      case "chat/isArchivedChanged":
+        return this.setFlag(channel, next.type.endsWith("isReadChanged") ? "isRead" : "isArchived", body);
       case "chat/draftChanged":
         return ACCEPT;
       case "chat/turnStarted":
@@ -1164,7 +1207,7 @@ export class SessionBridge implements SessionListener {
       return;
     }
     const frames = page.entries.map(frameFromEntry).filter((frame): frame is Frame => frame !== undefined);
-    const blank = emptyChat(chatUri, state.title, state.modifiedAt, STATUS_IDLE);
+    const blank = emptyChat(chatUri, state.title, state.modifiedAt, state.status);
     const turns = turnsFromFrames(frames, blank);
     const oldest = oldestSeq(frames);
     const next = page.hasMore && oldest !== undefined ? String(oldest) : undefined;

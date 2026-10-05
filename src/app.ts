@@ -1,5 +1,6 @@
 import { ProtocolCore } from "./protocol/core.js";
 import { AhpListener } from "./server/listener.js";
+import { FlagStore } from "./store/flags.js";
 import { TokenRegistry } from "./store/tokens.js";
 import { FileService } from "./files/service.js";
 import { Catalog } from "./bridge/catalog.js";
@@ -56,6 +57,7 @@ export async function startApp(config: Config, version: string): Promise<App> {
   const catalog = new Catalog({
     rest,
     extState,
+    flags: new FlagStore(config.flagsPath),
     ...(config.pollMs !== undefined ? { pollMs: config.pollMs } : {}),
     ...(config.warmPollMs !== undefined ? { warmPollMs: config.warmPollMs } : {}),
   });

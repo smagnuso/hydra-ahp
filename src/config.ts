@@ -14,6 +14,7 @@ export interface Config {
   warmPollMs: number | undefined;
   debug: boolean;
   tokensPath: string;
+  flagsPath: string;
   dirRoots: string[];
 }
 
@@ -35,6 +36,10 @@ export function hydraHome(env: NodeJS.ProcessEnv): string {
 
 export function tokensPath(env: NodeJS.ProcessEnv): string {
   return join(hydraHome(env), "extensions", "ahp", "tokens.json");
+}
+
+export function flagsPath(env: NodeJS.ProcessEnv): string {
+  return join(hydraHome(env), "extensions", "ahp", "flags.json");
 }
 
 // Directories the folder picker may browse (directories only) at the scoped level; defaults to the home directory.
@@ -66,6 +71,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warmPollMs: numberFrom(env, "HYDRA_AHP_WARM_POLL_MS"),
     debug: env.HYDRA_AHP_LOG_LEVEL === "debug",
     tokensPath: tokensPath(env),
+    flagsPath: flagsPath(env),
     dirRoots: dirRoots(env),
   };
 }
