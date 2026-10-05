@@ -208,12 +208,28 @@ export class HydraBackend implements Backend {
   }
 
   async detach(uri: string): Promise<void> {
+    if (isSessionUri(uri)) {
+      this.dropIdleSession(uri);
+      return;
+    }
     if (!isChatUri(uri)) {
       return;
     }
     const bridge = this.bridgeFor(uri);
     await bridge?.detach();
     this.evictIdle();
+    this.dropIdleSession(this.catalog.sessionUriForChat(uri));
+  }
+
+  // Session state only follows flags and input needs, so an unwatched channel is rebuilt from the current summary on the next subscribe.
+  private dropIdleSession(uri: string): void {
+    if (!this.core.store.has(uri) || this.core.hasSubscribers(uri)) {
+      return;
+    }
+    const busy = this.catalog.membersOf(uri).some((id) => this.core.hasSubscribers(this.catalog.chatOf(id)) || this.bridges.get(id)?.isAttached);
+    if (!busy) {
+      this.core.removeChannel(uri);
+    }
   }
 
   async handleAction(request: ActionRequest): Promise<ActionDecision> {
