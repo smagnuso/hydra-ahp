@@ -1,25 +1,95 @@
-import type { ChatState, SessionState } from "@microsoft/agent-host-protocol";
+import type { ChatState, SessionState, StateAction, ToolCallState } from "@microsoft/agent-host-protocol";
 import type { HydraSessionEntry, HydraRest } from "../hydra/rest.js";
-import type { HydraSessions, QueueEvent, SessionListener } from "../hydra/sessions.js";
+import type { HydraSessions, QueueEvent, SessionListener, SteeringResult } from "../hydra/sessions.js";
+import type { ActionDecision } from "../protocol/backend.js";
 import type { ProtocolCore } from "../protocol/core.js";
 import { ErrorCodes, RpcError } from "../rpc/peer.js";
 import { logger } from "../util/log.js";
 import type { Catalog } from "./catalog.js";
 import { ChatMapper, type Frame } from "./mapping.js";
+import { UnsupportedContent, chooseOption, confirmationOptions, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
 import { STATUS_IDLE, summaryToSessionState } from "./summary.js";
-import { bag, text, type Json } from "./turns.js";
+import { HYDRA_META, bag, text, type Json } from "./turns.js";
 
 const log = logger("bridge");
 
 const SESSION_NOT_FOUND = -32001;
 const PAGE_TURNS = 10;
 const INITIAL_TURNS = 20;
+// How long a cancel waits for the agent to act on the permissions it answered before stopping the turn.
+const SETTLE_WAIT_MS = 500;
+const ECHO_WAIT_MS = 5_000;
+const STEER_RETRY_MS = 500;
+
+// A prompt this bridge sent to Hydra. Hydra never echoes its own prompt_received or turn_complete to the sender.
+interface OwnEntry {
+  kind: "turn" | "queued" | "steer";
+  message: Json;
+  prompt: Json[];
+  // The AHP turn id once the entry runs.
+  turnId?: string;
+  // The AHP queued or steering message id the entry stands for.
+  pendingId?: string;
+  messageId?: string;
+  started: boolean;
+  cancelling: boolean;
+  named: Promise<string>;
+  name(messageId: string): void;
+}
+
+interface Parked {
+  turnId: string;
+  options: Json[];
+  answer(result: unknown): void;
+  abstain(): void;
+}
+
+interface HeldSteer {
+  id: string;
+  message: Json;
+  prompt: Json[];
+  inFlight: boolean;
+  triedTurn?: string;
+  triedAt?: number;
+}
 
 type Pending =
   | { kind: "frame"; frame: Frame }
   | { kind: "queue"; event: QueueEvent; params: Json }
-  | { kind: "closed" };
+  | { kind: "closed" }
+  | { kind: "permission"; params: Json; resolve(result: unknown): void; reject(err: Error): void }
+  | { kind: "settled"; entry: OwnEntry; result: unknown; error: Error | undefined };
+
+const ACCEPT: ActionDecision = { accept: true };
+
+function refuse(reason: string): ActionDecision {
+  return { accept: false, reason };
+}
+
+function abstention(): RpcError {
+  return new RpcError(ErrorCodes.MethodNotFound, "no AHP client is answering this permission request");
+}
+
+function ownEntry(fields: Pick<OwnEntry, "kind" | "message" | "prompt"> & Partial<OwnEntry>): OwnEntry {
+  let name: (messageId: string) => void = () => undefined;
+  const named = new Promise<string>((resolve) => {
+    name = resolve;
+  });
+  return { started: false, cancelling: false, ...fields, named, name };
+}
+
+function waitFor<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 export interface BridgeDeps {
   hydraId: string;
@@ -67,6 +137,18 @@ export class SessionBridge implements SessionListener {
   private chain: Promise<unknown> = Promise.resolve();
   private fetching: Promise<void> | undefined;
   private disposed = false;
+  private clientId: string | undefined;
+  private meta: Json = {};
+  private model: string | undefined;
+  private readonly sends: OwnEntry[] = [];
+  private readonly own = new Map<string, OwnEntry>();
+  private readonly queuedEntries = new Map<string, OwnEntry>();
+  private readonly parked = new Map<string, Parked>();
+  private readonly settling = new Map<string, () => void>();
+  // Resolved by another client with no verdict on the wire; the call's next update tells which way it went.
+  private readonly unresolved = new Map<string, Parked>();
+  private steer: HeldSteer | undefined;
+  private writes: Promise<unknown> = Promise.resolve();
   commands: unknown;
 
   constructor(private readonly deps: BridgeDeps) {}
@@ -130,6 +212,12 @@ export class SessionBridge implements SessionListener {
     this.deliver({ kind: "closed" });
   }
 
+  permission(params: Json): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      this.deliver({ kind: "permission", params, resolve, reject });
+    });
+  }
+
   private deliver(event: Pending): void {
     if (this.buffering) {
       this.buffering.push(event);
@@ -174,17 +262,23 @@ export class SessionBridge implements SessionListener {
     let history: Frame[];
     let cursor: string | undefined;
     let meta: Json;
+    let joined = false;
     try {
       if (viewer) {
         const result = await sessions.attach(hydraId, { readonly: true, history: "full" });
+        joined = true;
         meta = result.meta;
+        this.clientId = undefined;
         history = pending.splice(0).flatMap((event) => (event.kind === "frame" ? [event.frame] : []));
         const first = oldestSeq(history);
         cursor = first === undefined ? undefined : await this.olderThan(first);
         this.highWater = undefined;
       } else {
         const result = await sessions.attach(hydraId, { readonly: false, history: "pending_only" });
+        joined = true;
         meta = result.meta;
+        this.meta = meta;
+        this.clientId = result.clientId;
         const page = await rest.historyPage(hydraId, Number.MAX_SAFE_INTEGER, INITIAL_TURNS);
         history = page.entries.map(frameFromEntry).filter((frame): frame is Frame => frame !== undefined);
         const first = oldestSeq(history);
@@ -195,13 +289,25 @@ export class SessionBridge implements SessionListener {
       this.unlisten?.();
       this.unlisten = undefined;
       this.buffering = undefined;
+      for (const event of pending) {
+        if (event.kind === "permission") {
+          event.reject(abstention());
+        }
+      }
+      if (joined) {
+        await sessions.detach(hydraId);
+      }
       throw toRpc(err);
     }
 
     // Everything from here to the end of the method is synchronous, so no live frame can slip between the history and the join.
     const held = core.store.state(chatUri) as ChatState | undefined;
     const subscribed = core.hasSubscribers(chatUri) && held !== undefined;
+    const aliases = this.mapper.aliases;
     this.mapper = new ChatMapper();
+    for (const [messageId, turnId] of aliases) {
+      this.mapper.aliases.set(messageId, turnId);
+    }
     const produced: Json[] = [];
     const collect = (actions: Json[]): void => {
       produced.push(...actions);
@@ -211,11 +317,19 @@ export class SessionBridge implements SessionListener {
     }
     this.buffering = undefined;
     for (const event of pending) {
-      this.handle(event, collect);
+      if (event.kind !== "permission") {
+        this.handle(event, collect);
+      }
     }
     this.highWater = undefined;
-    collect(this.mapper.syncQueue(meta.queue));
+    collect(this.mapper.syncQueue(this.foreignQueue(meta.queue)));
     this.midTurn(meta, collect);
+    // Hydra replays still-open permissions during the attach, before the subscriber that caused it has joined.
+    for (const event of pending) {
+      if (event.kind === "permission") {
+        this.park(event, collect, !viewer);
+      }
+    }
 
     const summary = this.deps.catalog.summaryFor(this.deps.sessionUri);
     const base = held ?? emptyChat(chatUri, summary?.title ?? "", summary?.modifiedAt ?? new Date(0).toISOString(), STATUS_IDLE);
@@ -228,6 +342,19 @@ export class SessionBridge implements SessionListener {
     this.attached = !this.sawClosed;
     this.mode = viewer ? "viewer" : "live";
     this.syncChatSummary();
+    this.syncInputNeeded();
+  }
+
+  // The queue snapshot without this client's own entries, which already stand as AHP chips or turns.
+  private foreignQueue(entries: unknown): unknown[] {
+    return (Array.isArray(entries) ? entries : []).filter((raw) => {
+      const id = text(bag(raw).messageId);
+      return !(id && this.own.has(id)) && !this.isOwnOriginator(bag(raw));
+    });
+  }
+
+  private isOwnOriginator(params: Json): boolean {
+    return this.clientId !== undefined && text(bag(params.originator).clientId) === this.clientId;
   }
 
   // The attach-mid-turn rule: a busy session with no start event seen still gets an active turn.
@@ -296,7 +423,18 @@ export class SessionBridge implements SessionListener {
   }
 
   private handle(event: Pending, sink: (actions: Json[]) => void): void {
+    if (event.kind === "permission") {
+      this.park(event, sink);
+      return;
+    }
+    if (event.kind === "settled") {
+      this.settled(event.entry, event.result, event.error, sink);
+      return;
+    }
     if (event.kind === "queue") {
+      if (this.ownQueue(event.event, event.params, sink)) {
+        return;
+      }
       const actions =
         event.event === "added"
           ? this.mapper.queueAdded(event.params)
@@ -311,6 +449,7 @@ export class SessionBridge implements SessionListener {
       this.sawClosed = true;
       this.unlisten?.();
       this.unlisten = undefined;
+      this.abstainAll();
       sink(this.mapper.closeActive("cancelled"));
       return;
     }
@@ -319,6 +458,15 @@ export class SessionBridge implements SessionListener {
       return;
     }
     const kind = text(frame.update.sessionUpdate);
+    const toolCallId = text(frame.update.toolCallId);
+    if (toolCallId) {
+      this.settling.get(toolCallId)?.();
+      this.inferVerdict(toolCallId, frame.update, sink);
+    }
+    if (kind === "permission_resolved") {
+      this.permissionResolved(frame.update, sink);
+      return;
+    }
     if (kind === "session_info_update") {
       this.applyTitle(text(frame.update.title));
       return;
@@ -328,6 +476,7 @@ export class SessionBridge implements SessionListener {
       return;
     }
     sink(this.mapper.map(frame));
+    this.maybeSteer();
   }
 
   private applyTitle(title: string | undefined): void {
@@ -350,7 +499,9 @@ export class SessionBridge implements SessionListener {
     for (const next of actions) {
       core.publish(chatUri, action(next));
     }
+    this.sweepParked();
     this.syncChatSummary();
+    this.syncInputNeeded();
   }
 
   // Mirrors the chat's status and modification time into the session's chat catalog entry.
@@ -385,6 +536,7 @@ export class SessionBridge implements SessionListener {
   private async release(): Promise<void> {
     this.unlisten?.();
     this.unlisten = undefined;
+    this.abstainAll();
     if (this.attached) {
       this.attached = false;
       await this.deps.sessions.detach(this.deps.hydraId);
@@ -403,6 +555,563 @@ export class SessionBridge implements SessionListener {
     const warm = this.entry()?.status === "warm";
     if (warm && (!this.attached || this.mode === "viewer")) {
       this.ensureLive().catch((err) => log.warn(`re-attach ${this.deps.hydraId} failed`, toRpc(err).message));
+    }
+  }
+
+  // Client actions on this session's channels, one at a time so writes reach Hydra in the order they were accepted.
+  handleAction(channel: string, next: StateAction): Promise<ActionDecision> {
+    const work = this.writes.then(() => this.decide(channel, next));
+    this.writes = work.catch(() => undefined);
+    return work;
+  }
+
+  private async decide(channel: string, next: StateAction): Promise<ActionDecision> {
+    const body = next as unknown as Json;
+    if (channel === this.deps.sessionUri) {
+      if (next.type === "session/titleChanged") {
+        return this.retitle(text(body.title) ?? "");
+      }
+      return refuse("this host does not accept that action");
+    }
+    switch (next.type) {
+      case "chat/draftChanged":
+        return ACCEPT;
+      case "chat/turnStarted":
+        return this.startTurn(body);
+      case "chat/turnCancelled":
+        return this.cancelTurn(text(body.turnId) ?? "");
+      case "chat/toolCallConfirmed":
+        return this.confirm(body);
+      case "chat/pendingMessageSet":
+        return body.kind === "steering" ? this.setSteering(body) : this.setQueued(body);
+      case "chat/pendingMessageRemoved":
+        return body.kind === "steering" ? this.removeSteering(text(body.id) ?? "") : this.removeQueued(text(body.id) ?? "");
+      default:
+        return refuse("this host does not accept that action");
+    }
+  }
+
+  private chatState(): ChatState | undefined {
+    return this.deps.core.store.state(this.deps.chatUri) as ChatState | undefined;
+  }
+
+  private async retitle(title: string): Promise<ActionDecision> {
+    if (title.trim() === "") {
+      return refuse("the title is empty");
+    }
+    try {
+      await this.deps.rest.patchSession(this.deps.hydraId, { title });
+    } catch (err) {
+      return refuse(`Hydra did not take the title: ${message(err)}`);
+    }
+    return ACCEPT;
+  }
+
+  // Writes need a live attachment: a cold session is held through a read-only viewer, which Hydra refuses writes on.
+  private async writable(): Promise<string | undefined> {
+    if (!this.deps.core.hasSubscribers(this.deps.chatUri)) {
+      return "subscribe to the chat before writing to it";
+    }
+    try {
+      await this.ensureLive();
+    } catch (err) {
+      return `the session could not be opened: ${message(err)}`;
+    }
+    if (!this.isLive) {
+      return "the session is not available";
+    }
+    return undefined;
+  }
+
+  private promptFor(content: unknown): Json[] | string {
+    try {
+      return toAcpPrompt(content, promptCapabilities(this.meta));
+    } catch (err) {
+      if (err instanceof UnsupportedContent) {
+        return err.message;
+      }
+      throw err;
+    }
+  }
+
+  // The model on a turn's message is applied with session/set_model before the prompt goes out.
+  private async applyModel(content: unknown): Promise<string | undefined> {
+    const wanted = text(bag(bag(content).model).id);
+    if (!wanted || wanted === this.model) {
+      return undefined;
+    }
+    try {
+      await this.deps.sessions.setModel(this.deps.hydraId, wanted);
+    } catch (err) {
+      return `the agent did not switch to model ${wanted}: ${message(err)}`;
+    }
+    this.model = wanted;
+    return undefined;
+  }
+
+  private send(entry: OwnEntry): void {
+    this.sends.push(entry);
+    void this.deps.sessions
+      .prompt(this.deps.hydraId, entry.prompt, (result, error) => {
+        this.deliver({ kind: "settled", entry, result, error });
+      })
+      .catch(() => undefined);
+  }
+
+  private async startTurn(body: Json): Promise<ActionDecision> {
+    const turnId = text(body.turnId);
+    if (!turnId) {
+      return refuse("the turn has no id");
+    }
+    if (this.chatState()?.activeTurn) {
+      return refuse("a turn is already running; queue the message instead");
+    }
+    const blocked = await this.writable();
+    if (blocked) {
+      return refuse(blocked);
+    }
+    const prompt = this.promptFor(body.message);
+    if (typeof prompt === "string") {
+      return refuse(prompt);
+    }
+    const unswitched = await this.applyModel(body.message);
+    if (unswitched) {
+      return refuse(unswitched);
+    }
+    if (this.chatState()?.activeTurn) {
+      return refuse("a turn is already running; queue the message instead");
+    }
+    this.publish(this.mapper.beginLocal(turnId, Date.now()));
+    this.send(ownEntry({ kind: "turn", turnId, started: true, message: bag(body.message), prompt }));
+    return ACCEPT;
+  }
+
+  // Parked permissions are answered cancelled first: Hydra's session/cancel does not answer them for us.
+  private async cancelTurn(turnId: string): Promise<ActionDecision> {
+    if (!this.isLive) {
+      return refuse("the session is not available");
+    }
+    const answered: string[] = [];
+    for (const [toolCallId, parked] of this.parked) {
+      if (parked.turnId === turnId) {
+        this.parked.delete(toolCallId);
+        parked.answer({ outcome: { outcome: "cancelled" } });
+        answered.push(toolCallId);
+      }
+    }
+    const trailing = this.mapper.endLocal(turnId, Date.now());
+    if (answered.length > 0) {
+      await this.awaitAgent(answered);
+    }
+    this.deps.sessions.cancel(this.deps.hydraId);
+    this.publish(trailing);
+    return ACCEPT;
+  }
+
+  // Waits until the agent has acted on each answered permission, so the answers reach it ahead of the cancel.
+  private async awaitAgent(toolCallIds: string[]): Promise<void> {
+    const waits = toolCallIds.map(
+      (toolCallId) =>
+        new Promise<void>((resolve) => {
+          const timer = setTimeout(done, SETTLE_WAIT_MS);
+          const settling = this.settling;
+          function done(): void {
+            clearTimeout(timer);
+            settling.delete(toolCallId);
+            resolve();
+          }
+          settling.set(toolCallId, done);
+        }),
+    );
+    await Promise.all(waits);
+  }
+
+  private confirm(body: Json): ActionDecision {
+    const toolCallId = text(body.toolCallId) ?? "";
+    const parked = this.parked.get(toolCallId);
+    if (!parked || parked.turnId !== text(body.turnId)) {
+      return refuse("this permission request is no longer open");
+    }
+    const approved = body.approved === true;
+    const optionId = chooseOption(parked.options, approved, text(body.selectedOptionId));
+    if (approved && !optionId) {
+      return refuse("the agent offered no option that approves this tool call");
+    }
+    this.parked.delete(toolCallId);
+    parked.answer(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } });
+    this.mapper.noteConfirmed(toolCallId);
+    this.syncInputNeeded();
+    return ACCEPT;
+  }
+
+  private async setQueued(body: Json): Promise<ActionDecision> {
+    const id = text(body.id);
+    if (!id) {
+      return refuse("the queued message has no id");
+    }
+    const blocked = await this.writable();
+    if (blocked) {
+      return refuse(blocked);
+    }
+    const prompt = this.promptFor(body.message);
+    if (typeof prompt === "string") {
+      return refuse(prompt);
+    }
+    const known = this.queuedEntries.get(id);
+    if (!known) {
+      if ((this.chatState()?.queuedMessages ?? []).some((entry) => entry.id === id)) {
+        return refuse(`queued message ${id} is not one this host can edit`);
+      }
+      const entry = ownEntry({ kind: "queued", pendingId: id, message: bag(body.message), prompt });
+      this.queuedEntries.set(id, entry);
+      this.send(entry);
+      return ACCEPT;
+    }
+    if (known.started) {
+      return refuse(`queued message ${id} is already running`);
+    }
+    let result;
+    try {
+      const messageId = await waitFor(known.named, ECHO_WAIT_MS, "Hydra to queue the message");
+      result = await this.deps.sessions.updateQueued(this.deps.hydraId, messageId, prompt);
+    } catch (err) {
+      return refuse(message(err));
+    }
+    if (!result.ok) {
+      return refuse(`Hydra did not update the queued message: ${result.reason}`);
+    }
+    known.message = bag(body.message);
+    known.prompt = prompt;
+    return ACCEPT;
+  }
+
+  private async removeQueued(id: string): Promise<ActionDecision> {
+    const entry = this.queuedEntries.get(id);
+    if (!entry) {
+      return ACCEPT;
+    }
+    if (entry.started) {
+      return refuse(`queued message ${id} is already running`);
+    }
+    entry.cancelling = true;
+    let result;
+    try {
+      const messageId = await waitFor(entry.named, ECHO_WAIT_MS, "Hydra to queue the message");
+      result = await this.deps.sessions.cancelQueued(this.deps.hydraId, messageId);
+    } catch (err) {
+      entry.cancelling = false;
+      return refuse(message(err));
+    }
+    if (!result.ok && result.reason === "already_running") {
+      entry.cancelling = false;
+      return refuse(`queued message ${id} is already running`);
+    }
+    this.queuedEntries.delete(id);
+    return ACCEPT;
+  }
+
+  // Steering goes to Hydra only while a turn runs; sent idle it is held and delivered once the next turn is under way.
+  private async setSteering(body: Json): Promise<ActionDecision> {
+    const id = text(body.id);
+    if (!id) {
+      return refuse("the steering message has no id");
+    }
+    if (this.steer?.inFlight) {
+      return refuse("a steering message is already being delivered");
+    }
+    const blocked = await this.writable();
+    if (blocked) {
+      return refuse(blocked);
+    }
+    const prompt = this.promptFor(body.message);
+    if (typeof prompt === "string") {
+      return refuse(prompt);
+    }
+    if (this.steer?.inFlight) {
+      return refuse("a steering message is already being delivered");
+    }
+    this.steer = { id, message: bag(body.message), prompt, inFlight: false };
+    this.maybeSteer();
+    return ACCEPT;
+  }
+
+  private removeSteering(id: string): ActionDecision {
+    if (this.steer?.id === id) {
+      if (this.steer.inFlight) {
+        return refuse("the steering message is already being delivered");
+      }
+      this.steer = undefined;
+    }
+    return ACCEPT;
+  }
+
+  private maybeSteer(): void {
+    const steer = this.steer;
+    const turnId = this.mapper.activeTurnId;
+    if (!steer || steer.inFlight || !turnId || !this.isLive) {
+      return;
+    }
+    if (steer.triedTurn === turnId && Date.now() - (steer.triedAt ?? 0) < STEER_RETRY_MS) {
+      return;
+    }
+    steer.inFlight = true;
+    steer.triedTurn = turnId;
+    steer.triedAt = Date.now();
+    const entry = ownEntry({ kind: "steer", pendingId: steer.id, message: steer.message, prompt: steer.prompt });
+    this.sends.push(entry);
+    this.deps.sessions.steer(this.deps.hydraId, steer.prompt).then(
+      (result) => this.steered(steer, entry, result),
+      (err) => {
+        log.warn(`steering ${this.deps.hydraId} failed`, message(err));
+        this.steered(steer, entry, { outcome: "failed" });
+      },
+    );
+  }
+
+  // Per PROTOCOL.md: startedNewTurn without detached is an entry Hydra queued for us, whose start consumes the chip;
+  // detached is already covered by _hydra_turn_started; injected is never echoed to the steering client.
+  private steered(steer: HeldSteer, entry: OwnEntry, result: SteeringResult): void {
+    steer.inFlight = false;
+    if (result.outcome === "promptRequired") {
+      this.dropSend(entry);
+      return;
+    }
+    if (this.steer === steer) {
+      this.steer = undefined;
+    }
+    if (result.outcome === "startedNewTurn" && result.detached !== true) {
+      return;
+    }
+    this.dropSend(entry);
+    if (this.chatState()?.steeringMessage?.id === steer.id) {
+      this.publish([{ type: "chat/pendingMessageRemoved", kind: "steering", id: steer.id }]);
+    }
+  }
+
+  private dropSend(entry: OwnEntry): void {
+    const index = this.sends.indexOf(entry);
+    if (index >= 0) {
+      this.sends.splice(index, 1);
+    }
+  }
+
+  // Hydra's queue notifications about this client's own prompts; true when the event was one of those.
+  private ownQueue(event: QueueEvent, params: Json, sink: (actions: Json[]) => void): boolean {
+    const messageId = text(params.messageId);
+    if (!messageId) {
+      return false;
+    }
+    if (event === "added") {
+      if (!this.isOwnOriginator(params)) {
+        return false;
+      }
+      const amending = text(bag(bag(params._meta)[HYDRA_META]).amending) !== undefined;
+      const entry = this.sends.find((candidate) => (candidate.kind === "steer") === amending);
+      if (!entry) {
+        return false;
+      }
+      this.dropSend(entry);
+      entry.messageId = messageId;
+      this.own.set(messageId, entry);
+      if (entry.turnId) {
+        this.mapper.aliases.set(messageId, entry.turnId);
+      }
+      entry.name(messageId);
+      return true;
+    }
+    const entry = this.own.get(messageId);
+    if (!entry) {
+      return false;
+    }
+    if (event === "updated") {
+      return true;
+    }
+    if (text(params.reason) === "started") {
+      if (!entry.started) {
+        entry.started = true;
+        entry.turnId = messageId;
+        sink(this.mapper.startOwn(messageId, Date.now(), entry.message, entry.pendingId));
+      }
+      if (entry.kind === "steer") {
+        this.own.delete(messageId);
+      }
+      return true;
+    }
+    this.own.delete(messageId);
+    if (entry.kind === "queued" && entry.pendingId) {
+      this.queuedEntries.delete(entry.pendingId);
+    }
+    if (entry.pendingId && !entry.cancelling) {
+      sink(this.pendingRemoval(entry));
+    }
+    return true;
+  }
+
+  private pendingRemoval(entry: OwnEntry): Json[] {
+    const chat = this.chatState();
+    const id = entry.pendingId;
+    if (!chat || !id) {
+      return [];
+    }
+    if (entry.kind === "queued" && (chat.queuedMessages ?? []).some((queued) => queued.id === id)) {
+      return [{ type: "chat/pendingMessageRemoved", kind: "queued", id }];
+    }
+    if (entry.kind === "steer" && chat.steeringMessage?.id === id) {
+      return [{ type: "chat/pendingMessageRemoved", kind: "steering", id }];
+    }
+    return [];
+  }
+
+  // The session/prompt answer is the only end this client hears of its own turn; Hydra leaves it out of turn_complete.
+  private settled(entry: OwnEntry, result: unknown, error: Error | undefined, sink: (actions: Json[]) => void): void {
+    this.dropSend(entry);
+    if (entry.messageId) {
+      this.own.delete(entry.messageId);
+    }
+    if (entry.kind === "queued" && entry.pendingId && this.queuedEntries.get(entry.pendingId) === entry) {
+      this.queuedEntries.delete(entry.pendingId);
+    }
+    const turnId = entry.turnId;
+    if (!entry.started || !turnId) {
+      if (!entry.cancelling) {
+        sink(this.pendingRemoval(entry));
+      }
+      return;
+    }
+    if (this.mapper.activeTurnId !== turnId) {
+      if (!this.mapper.activeTurnId) {
+        this.mapper.unsilence();
+      }
+      return;
+    }
+    if (error) {
+      sink(this.mapper.closeActive("error", Date.now(), `Hydra could not run the prompt: ${error.message}`));
+      return;
+    }
+    sink(this.mapper.closeActive(text(bag(result).stopReason) ?? "end_turn", Date.now()));
+  }
+
+  private park(event: Extract<Pending, { kind: "permission" }>, sink: (actions: Json[]) => void, joining = false): void {
+    const toolCall = bag(event.params.toolCall);
+    const toolCallId = text(toolCall.toolCallId);
+    const turnId = this.mapper.activeTurnId;
+    const asking = joining || (this.isLive && this.deps.core.hasSubscribers(this.deps.chatUri));
+    // No AHP client to ask means abstaining; anything else would settle the race for the TUI and Slack too.
+    if (!toolCallId || !turnId || !asking) {
+      event.reject(abstention());
+      return;
+    }
+    this.parked.get(toolCallId)?.abstain();
+    const options = (Array.isArray(event.params.options) ? event.params.options : []).map(bag);
+    this.parked.set(toolCallId, {
+      turnId,
+      options,
+      answer: event.resolve,
+      abstain: () => event.reject(abstention()),
+    });
+    sink(this.mapper.confirmationReady(toolCall, confirmationOptions(options)));
+  }
+
+  // Another Hydra client answered first: clear the AHP prompt the way that client's answer went.
+  private permissionResolved(update: Json, sink: (actions: Json[]) => void): void {
+    const toolCallId = text(update.toolCallId);
+    const parked = toolCallId ? this.parked.get(toolCallId) : undefined;
+    if (!toolCallId || !parked) {
+      return;
+    }
+    this.parked.delete(toolCallId);
+    parked.abstain();
+    this.mapper.noteConfirmed(toolCallId);
+    // Hydra reads the outcome's kind field while ACP answers name it outcome, so a spec-shaped answer arrives with no verdict.
+    const outcome = bag(update.outcome);
+    const chosen = text(update.chosenOptionId) ?? text(outcome.optionId);
+    const kind = text(outcome.kind) ?? text(outcome.outcome);
+    if (!chosen && kind !== "cancelled") {
+      this.unresolved.set(toolCallId, parked);
+      return;
+    }
+    sink([this.verdict(parked, toolCallId, isApproval(parked.options, chosen), chosen)]);
+  }
+
+  private verdict(parked: Parked, toolCallId: string, approved: boolean, chosen?: string): Json {
+    return {
+      type: "chat/toolCallConfirmed",
+      turnId: parked.turnId,
+      toolCallId,
+      ...(approved ? { approved: true, confirmed: "user-action" } : { approved: false, reason: "denied" }),
+      ...(chosen ? { selectedOptionId: chosen } : {}),
+    };
+  }
+
+  // A call that goes on to fail was denied; any other progress means it was approved.
+  private inferVerdict(toolCallId: string, update: Json, sink: (actions: Json[]) => void): void {
+    const parked = this.unresolved.get(toolCallId);
+    const status = text(update.status);
+    if (!parked || !status || status === "pending") {
+      return;
+    }
+    this.unresolved.delete(toolCallId);
+    if (parked.turnId === this.mapper.activeTurnId) {
+      sink([this.verdict(parked, toolCallId, status !== "failed")]);
+    }
+  }
+
+  // A permission whose turn is over can no longer be answered by an AHP client.
+  private sweepParked(): void {
+    const turnId = this.mapper.activeTurnId;
+    for (const [toolCallId, parked] of this.unresolved) {
+      if (parked.turnId !== turnId) {
+        this.unresolved.delete(toolCallId);
+      }
+    }
+    for (const [toolCallId, parked] of this.parked) {
+      if (parked.turnId !== turnId) {
+        this.parked.delete(toolCallId);
+        parked.abstain();
+      }
+    }
+  }
+
+  private abstainAll(): void {
+    for (const parked of this.parked.values()) {
+      parked.abstain();
+    }
+    this.parked.clear();
+    this.syncInputNeeded();
+  }
+
+  private inputId(toolCallId: string): string {
+    return `${this.deps.chatUri}#${toolCallId}`;
+  }
+
+  // Mirrors the parked confirmations into the session's inputNeeded list.
+  private syncInputNeeded(): void {
+    const { core, chatUri, sessionUri } = this.deps;
+    const session = core.store.state(sessionUri) as SessionState | undefined;
+    const chat = this.chatState();
+    if (!session || !chat) {
+      return;
+    }
+    const stale = new Set((session.inputNeeded ?? []).filter((entry) => entry.chat === chatUri).map((entry) => entry.id));
+    for (const [toolCallId, parked] of this.parked) {
+      const id = this.inputId(toolCallId);
+      if (stale.delete(id)) {
+        continue;
+      }
+      const part = chat.activeTurn?.responseParts.find(
+        (candidate) => candidate.kind === "toolCall" && candidate.toolCall.toolCallId === toolCallId,
+      );
+      const call = part?.kind === "toolCall" ? (part.toolCall as ToolCallState) : undefined;
+      if (call?.status !== "pending-confirmation") {
+        continue;
+      }
+      core.publish(
+        sessionUri,
+        action({ type: "session/inputNeededSet", request: { id, chat: chatUri, kind: "toolConfirmation", turnId: parked.turnId, toolCall: call } }),
+      );
+    }
+    for (const id of stale) {
+      core.publish(sessionUri, action({ type: "session/inputNeededRemoved", id }));
     }
   }
 

@@ -9,6 +9,7 @@ import { FileService } from "../../src/files/service.js";
 import type { ExtensionState } from "../../src/hydra/ext-state.js";
 import type { HistoryPage, HydraRest, HydraSessionEntry } from "../../src/hydra/rest.js";
 import type { AttachOptions, AttachResult, HydraSessions, SessionListener } from "../../src/hydra/sessions.js";
+import type { SettleHandler } from "../../src/rpc/peer.js";
 import { ProtocolCore } from "../../src/protocol/core.js";
 import { AhpListener } from "../../src/server/listener.js";
 import { TokenRegistry } from "../../src/store/tokens.js";
@@ -16,6 +17,18 @@ import { openSession, sleep, type Session } from "./harness.js";
 
 export interface AttachCall extends AttachOptions {
   id: string;
+}
+
+export interface WriteCall {
+  method: string;
+  id: string;
+  params?: unknown;
+}
+
+export interface PromptCall {
+  id: string;
+  prompt: unknown[];
+  end(stopReason: string): void;
 }
 
 // Stands in for the daemon's side of session/attach so bridge behaviour can be scripted.
@@ -34,6 +47,10 @@ export class FakeHydra {
   history: HistoryPage[] = [];
   readonly pageCalls: Array<{ beforeSeq: number; turns?: number }> = [];
   rows: HydraSessionEntry[] = [];
+  // Every write the bridge sent, in order, and the prompts still waiting for their answer.
+  readonly writes: WriteCall[] = [];
+  readonly prompts: PromptCall[] = [];
+  modelFailure: Error | undefined;
 
   sessions = {
     listen: (_id: string, listener: SessionListener) => {
@@ -62,6 +79,31 @@ export class FakeHydra {
     detach: async (id: string): Promise<void> => {
       this.detaches.push(id);
     },
+    prompt: (id: string, prompt: unknown[], onSettle: SettleHandler): Promise<unknown> => {
+      this.writes.push({ method: "session/prompt", id, params: prompt });
+      return new Promise((resolve) => {
+        this.prompts.push({
+          id,
+          prompt,
+          end: (stopReason) => {
+            onSettle({ stopReason }, undefined);
+            resolve({ stopReason });
+          },
+        });
+      });
+    },
+    cancel: (id: string): void => {
+      this.writes.push({ method: "session/cancel", id });
+    },
+    setModel: async (id: string, modelId: string): Promise<void> => {
+      this.writes.push({ method: "session/set_model", id, params: modelId });
+      if (this.modelFailure) {
+        throw this.modelFailure;
+      }
+    },
+    delete: async (id: string): Promise<void> => {
+      this.writes.push({ method: "session/delete", id });
+    },
   } as unknown as HydraSessions;
 
   rest = {
@@ -73,6 +115,9 @@ export class FakeHydra {
         return this.newest;
       }
       return this.history.shift() ?? { entries: [], hasMore: false };
+    },
+    patchSession: async (id: string, body: unknown) => {
+      this.writes.push({ method: "PATCH", id, params: body });
     },
   } as unknown as HydraRest;
 

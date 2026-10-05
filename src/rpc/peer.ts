@@ -32,7 +32,11 @@ export type NotificationHandler = (params: unknown) => void | Promise<void>;
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  onSettle?: SettleHandler;
 }
+
+// Runs synchronously when the response is read, so it keeps its place among the notifications around it.
+export type SettleHandler = (result: unknown, error: Error | undefined) => void;
 
 type Json = Record<string, unknown>;
 
@@ -67,13 +71,15 @@ export class JsonRpcPeer {
     this.write({ jsonrpc: "2.0", method, ...(params !== undefined ? { params } : {}) });
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown, onSettle?: SettleHandler): Promise<unknown> {
     if (this.closed) {
-      return Promise.reject(new Error("peer closed"));
+      const error = new Error("peer closed");
+      onSettle?.(undefined, error);
+      return Promise.reject(error);
     }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, ...(onSettle ? { onSettle } : {}) });
       this.write({ jsonrpc: "2.0", id, method, ...(params !== undefined ? { params } : {}) });
     });
   }
@@ -88,7 +94,9 @@ export class JsonRpcPeer {
     }
     this.closed = true;
     for (const [id, pending] of this.pending) {
-      pending.reject(new Error("peer closed"));
+      const error = new Error("peer closed");
+      pending.onSettle?.(undefined, error);
+      pending.reject(error);
       this.pending.delete(id);
     }
   }
@@ -133,9 +141,12 @@ export class JsonRpcPeer {
         message?: string;
         data?: unknown;
       };
-      pending.reject(new RpcError(code ?? ErrorCodes.InternalError, text ?? "error", data));
+      const error = new RpcError(code ?? ErrorCodes.InternalError, text ?? "error", data);
+      pending.onSettle?.(undefined, error);
+      pending.reject(error);
       return;
     }
+    pending.onSettle?.(message.result, undefined);
     pending.resolve(message.result);
   }
 

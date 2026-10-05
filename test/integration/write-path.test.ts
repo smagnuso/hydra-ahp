@@ -3,13 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { ChatState, Snapshot, ToolCallState } from "@microsoft/agent-host-protocol";
-import { ChatView, markdown, runsPending, user } from "../support/chat-view.js";
+import { ChatView, markdown, user } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { openSession } from "../support/harness.js";
 import { ScratchDaemon, sleep, until } from "../support/scratch.js";
 
-// WP5 scenarios, written ahead of T10; see runsPending.
-describe.skipIf(!runsPending("T10"))("write path against a scratch daemon", () => {
+describe("write path against a scratch daemon", () => {
   let daemon: ScratchDaemon;
   let driver: Driver;
   let ahp: AhpConnection;

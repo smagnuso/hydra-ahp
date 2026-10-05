@@ -26,6 +26,8 @@ export interface MapperOptions {
 
 const MAX_OUTPUT_CHARS = 20_000;
 const TERMINAL_STATUSES = new Set(["completed", "failed"]);
+const CONTENT_KINDS = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan", "usage_update"]);
+const END_KINDS = new Set(["turn_complete", "_hydra_turn_ended"]);
 
 const NO_ACTIONS: Json[] = [];
 
@@ -137,7 +139,11 @@ export class ChatMapper {
   private readonly queued = new Set<string>();
   private lastAt = 0;
   private readonly clock: () => number;
+  // Set once a turn was ended here ahead of Hydra, so its trailing frames do not open an orphan turn.
+  private silenced = false;
   steeringId: string | undefined;
+  // Hydra messageIds of turns AHP clients started, mapped to the client's turnId.
+  readonly aliases = new Map<string, string>();
 
   constructor(options: MapperOptions = {}) {
     this.clock = options.clock ?? Date.now;
@@ -162,6 +168,15 @@ export class ChatMapper {
     }
     const update = frame.update;
     const kind = text(update.sessionUpdate) ?? text(update.kind);
+    if (this.silenced && !this.turn) {
+      if (END_KINDS.has(kind ?? "")) {
+        this.silenced = false;
+        return NO_ACTIONS;
+      }
+      if (CONTENT_KINDS.has(kind ?? "")) {
+        return NO_ACTIONS;
+      }
+    }
     switch (kind) {
       case "prompt_received":
         return this.promptReceived(update, at, frame);
@@ -248,11 +263,11 @@ export class ChatMapper {
   }
 
   // Closes whatever the mapper believes is open, e.g. when the session closed or a replay stopped mid-turn.
-  closeActive(stop: string, atMs?: number): Json[] {
+  closeActive(stop: string, atMs?: number, errorMessage?: string): Json[] {
     if (!this.turn) {
       return NO_ACTIONS;
     }
-    return this.end(stop, atMs ?? (this.lastAt || this.clock()));
+    return this.end(stop, atMs ?? (this.lastAt || this.clock()), undefined, errorMessage);
   }
 
   // Marks a call as awaiting a permission answer so a ready that says nobody is asked is not sent.
@@ -263,7 +278,77 @@ export class ChatMapper {
     }
   }
 
+  // The confirmation was answered, so later content updates may flow into the call again.
+  noteConfirmed(toolCallId: string): void {
+    const call = this.turn?.calls.get(toolCallId);
+    if (call) {
+      call.readied = true;
+    }
+  }
+
+  // Puts the call in pending-confirmation with the offered options, starting it first if no frame named it yet.
+  confirmationReady(toolCall: Json, options: Json[]): Json[] {
+    const turn = this.turn;
+    const toolCallId = text(toolCall.toolCallId);
+    if (!turn || !toolCallId) {
+      return NO_ACTIONS;
+    }
+    const actions: Json[] = [];
+    const known = turn.calls.has(toolCallId);
+    const call = this.callOf(turn, toolCall);
+    if (!known) {
+      call.status = "pending";
+      call.startedAt = this.clock();
+      actions.push(this.toolStart(turn, call));
+    }
+    if (call.input === undefined && toolCall.rawInput !== undefined) {
+      call.input = JSON.stringify(toolCall.rawInput);
+    }
+    call.asked = true;
+    const title = text(toolCall.title);
+    actions.push({
+      type: "chat/toolCallReady",
+      turnId: turn.id,
+      toolCallId,
+      invocationMessage: call.displayName,
+      ...(title ? { confirmationTitle: title } : {}),
+      ...(call.input === undefined ? {} : { toolInput: call.input }),
+      ...(options.length > 0 ? { options } : {}),
+      ...this.callMeta(call),
+    });
+    return actions;
+  }
+
+  // A turn an AHP client started: the client's own turnStarted is the announcement, so only the context opens here.
+  beginLocal(turnId: string, startedMs: number): Json[] {
+    const actions = this.turn ? this.end("cancelled", startedMs) : [];
+    this.turn = openTurn(turnId, startedMs);
+    this.silenced = false;
+    return actions;
+  }
+
+  // Announces a turn Hydra started for this client, which Hydra does not echo back to it.
+  startOwn(turnId: string, startedMs: number, message: Json, queuedMessageId?: string): Json[] {
+    return this.start(turnId, startedMs, message, queuedMessageId);
+  }
+
+  // A client's chat/turnCancelled ends the turn in AHP; closes the plan and drops what Hydra still sends for it.
+  endLocal(turnId: string, atMs: number): Json[] {
+    if (this.turn?.id !== turnId) {
+      return NO_ACTIONS;
+    }
+    const actions = this.end("cancelled", atMs).filter((next) => next.type !== "chat/turnCancelled");
+    this.silenced = true;
+    return actions;
+  }
+
+  // Hydra settled the turn the client ended, so later frames belong to whatever runs next.
+  unsilence(): void {
+    this.silenced = false;
+  }
+
   private start(id: string, startedMs: number, message: Json, queuedMessageId?: string): Json[] {
+    this.silenced = false;
     const actions = this.turn ? this.end("cancelled", startedMs) : [];
     this.turn = openTurn(id, startedMs);
     actions.push({
@@ -285,11 +370,12 @@ export class ChatMapper {
   }
 
   private promptReceived(update: Json, at: number, frame: Frame): Json[] {
-    const id = text(update.messageId) ?? `prompt-${frame.seq ?? at}`;
+    const messageId = text(update.messageId);
+    const id = (messageId && this.aliases.get(messageId)) ?? messageId ?? `prompt-${frame.seq ?? at}`;
     const sentBy = bag(update.sentBy);
     const origin = sentBy.fromSession || sentBy.fromLabel ? "agent" : "user";
     const meta = Object.keys(sentBy).length > 0 ? { [HYDRA_META]: { sentBy } } : undefined;
-    const queuedMessageId = this.queued.delete(id) ? id : undefined;
+    const queuedMessageId = messageId && this.queued.delete(messageId) ? messageId : undefined;
     return this.start(id, at, messageOf(promptText(update.prompt), origin, meta), queuedMessageId);
   }
 
@@ -552,7 +638,7 @@ export class ChatMapper {
     return this.end(stop, at, duration);
   }
 
-  private end(stop: string, at: number, reportedDuration?: number): Json[] {
+  private end(stop: string, at: number, reportedDuration?: number, errorMessage?: string): Json[] {
     const turn = this.turn;
     if (!turn) {
       return NO_ACTIONS;
@@ -573,7 +659,7 @@ export class ChatMapper {
         type: "chat/error",
         turnId: turn.id,
         duration,
-        part: { kind: "error", error: { errorType: stop, message: `The agent ended the turn: ${stop}` } },
+        part: { kind: "error", error: { errorType: stop, message: errorMessage ?? `The agent ended the turn: ${stop}` } },
       });
     } else {
       actions.push({ type: "chat/turnComplete", turnId: turn.id, duration });

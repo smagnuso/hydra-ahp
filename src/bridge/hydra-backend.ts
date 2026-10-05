@@ -9,7 +9,7 @@ import type { ActionDecision, ActionRequest, Backend, ClientContext } from "../p
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { FileService } from "../files/service.js";
-import { HydraHttpError, type HydraRest } from "../hydra/rest.js";
+import type { HydraRest } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
 import { AHP_URI_KEY, type Catalog } from "./catalog.js";
@@ -170,8 +170,16 @@ export class HydraBackend implements Backend {
     this.evictIdle();
   }
 
-  handleAction(_request: ActionRequest): ActionDecision {
-    return { accept: false, reason: "this host does not accept that action yet" };
+  async handleAction(request: ActionRequest): Promise<ActionDecision> {
+    const { channel } = request;
+    if (!isChatUri(channel) && !isSessionUri(channel)) {
+      return { accept: false, reason: "this host does not accept that action" };
+    }
+    const bridge = this.bridgeFor(channel);
+    if (!bridge) {
+      return { accept: false, reason: "the session is not ready yet" };
+    }
+    return bridge.handleAction(channel, request.action);
   }
 
   async handleCommand(method: string, params: unknown, client: ClientContext): Promise<unknown> {
@@ -282,15 +290,12 @@ export class HydraBackend implements Backend {
       throw new RpcError(SESSION_NOT_FOUND, "Session not found");
     }
     try {
-      await this.rest.deleteSession(hydraId);
+      await this.sessions.delete(hydraId);
     } catch (err) {
-      if (err instanceof HydraHttpError && err.status === 404) {
+      if (err instanceof RpcError && err.code === SESSION_NOT_FOUND) {
         throw new RpcError(SESSION_NOT_FOUND, "Session not found");
       }
-      if (err instanceof HydraHttpError && err.status === 502) {
-        throw new RpcError(ErrorCodes.InternalError, `the remote host for this session is unreachable: ${err.message}`);
-      }
-      throw err;
+      throw new RpcError(ErrorCodes.InternalError, `Hydra could not delete the session: ${message(err)}`);
     }
     this.catalog.remove(hydraId);
     return null;

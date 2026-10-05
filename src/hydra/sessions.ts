@@ -1,7 +1,7 @@
 import type { Frame } from "../bridge/mapping.js";
 import { frameFromNotification } from "../bridge/replay.js";
 import { HYDRA_META, bag, text, type Json } from "../bridge/turns.js";
-import { ErrorCodes, RpcError } from "../rpc/peer.js";
+import { ErrorCodes, RpcError, type SettleHandler } from "../rpc/peer.js";
 import { logger } from "../util/log.js";
 import type { HydraClient } from "./client.js";
 
@@ -13,6 +13,8 @@ export interface SessionListener {
   update(frame: Frame): void;
   queue(event: QueueEvent, params: Json): void;
   closed(): void;
+  // Answers a permission request Hydra sent this client; throwing -32601 abstains.
+  permission?(params: Json): Promise<unknown>;
 }
 
 export interface AttachOptions {
@@ -22,6 +24,23 @@ export interface AttachOptions {
 
 export interface AttachResult {
   meta: Json;
+  clientId?: string;
+}
+
+export type SteeringOutcome = "injected" | "startedNewTurn" | "promptRequired" | "failed";
+
+export interface SteeringResult {
+  outcome: SteeringOutcome;
+  detached?: boolean;
+}
+
+export interface QueueEditResult {
+  ok: boolean;
+  reason: string;
+}
+
+function abstain(): never {
+  throw new RpcError(ErrorCodes.MethodNotFound, "this client does not answer that permission request");
 }
 
 // Routes the one /acp connection's per-session notifications to the bridge that attached each session.
@@ -54,12 +73,18 @@ export class HydraSessions {
         this.listeners.get(id)?.closed();
       }
     });
-    // Abstain: an answer other than -32601 would settle Hydra's permission race for every client.
-    const abstain = (): never => {
-      throw new RpcError(ErrorCodes.MethodNotFound, "this client does not answer permission requests");
+    // Any answer other than -32601 settles Hydra's permission race for every client, so only a bridge that parks the request answers.
+    const permission = (raw: unknown): Promise<unknown> => {
+      const params = bag(raw);
+      const id = text(params.sessionId);
+      const listener = id ? this.listeners.get(id) : undefined;
+      if (!listener?.permission) {
+        abstain();
+      }
+      return listener.permission(params);
     };
-    peer.onRequest("session/request_permission", abstain);
-    peer.onRequest("hydra-acp/session/request_permission", abstain);
+    peer.onRequest("session/request_permission", permission);
+    peer.onRequest("hydra-acp/session/request_permission", permission);
   }
 
   listen(hydraId: string, listener: SessionListener): () => void {
@@ -81,7 +106,48 @@ export class HydraSessions {
         ...(options.readonly ? { _meta: { [HYDRA_META]: { readonly: true } } } : {}),
       }),
     );
-    return { meta: bag(bag(result._meta)[HYDRA_META]) };
+    const clientId = text(result.clientId);
+    return { meta: bag(bag(result._meta)[HYDRA_META]), ...(clientId ? { clientId } : {}) };
+  }
+
+  // Resolves when the turn ends; onSettle sees the outcome in wire order with the session's notifications.
+  prompt(hydraId: string, prompt: Json[], onSettle: SettleHandler): Promise<unknown> {
+    return this.client.peer.request("session/prompt", { sessionId: hydraId, prompt }, onSettle);
+  }
+
+  cancel(hydraId: string): void {
+    this.client.peer.notify("session/cancel", { sessionId: hydraId });
+  }
+
+  async steer(hydraId: string, prompt: Json[]): Promise<SteeringResult> {
+    const result = bag(
+      await this.client.request("_session/steering", {
+        sessionId: hydraId,
+        prompt,
+        _meta: { steering: { idleBehavior: "promptRequired" } },
+      }),
+    );
+    const outcome = text(result.outcome);
+    const known = outcome === "injected" || outcome === "startedNewTurn" || outcome === "promptRequired";
+    return { outcome: known ? outcome : "failed", ...(result.detached === true ? { detached: true } : {}) };
+  }
+
+  async updateQueued(hydraId: string, messageId: string, prompt: Json[]): Promise<QueueEditResult> {
+    const result = bag(await this.client.request("hydra-acp/prompt/update", { sessionId: hydraId, messageId, prompt }));
+    return { ok: result.updated === true, reason: text(result.reason) ?? "unknown" };
+  }
+
+  async cancelQueued(hydraId: string, messageId: string): Promise<QueueEditResult> {
+    const result = bag(await this.client.request("hydra-acp/prompt/cancel", { sessionId: hydraId, messageId }));
+    return { ok: result.cancelled === true, reason: text(result.reason) ?? "unknown" };
+  }
+
+  async setModel(hydraId: string, modelId: string): Promise<void> {
+    await this.client.request("session/set_model", { sessionId: hydraId, modelId });
+  }
+
+  async delete(hydraId: string): Promise<void> {
+    await this.client.request("session/delete", { sessionId: hydraId });
   }
 
   async detach(hydraId: string): Promise<void> {
