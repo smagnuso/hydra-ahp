@@ -487,3 +487,30 @@ describe("version negotiation", () => {
     expect(harness.core.recallVersion("never-seen")).toBe("0.9.0");
   });
 });
+
+describe("detach grace", () => {
+  let harness: Harness;
+
+  afterEach(async () => {
+    await harness.stop();
+  });
+
+  it("keeps a channel attached through a quick unsubscribe and resubscribe, and detaches once it stays unwatched", async () => {
+    harness = await startHarness({ detachGraceMs: 150 });
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(CHAT);
+
+    await session.client.unsubscribe(CHAT);
+    await session.client.subscribe(CHAT);
+    await sleep(250);
+    expect(harness.backend.detached).toEqual([]);
+
+    await session.client.unsubscribe(CHAT);
+    await session.client.ping();
+    expect(harness.backend.detached).toEqual([]);
+    await sleep(250);
+    expect(harness.backend.detached).toEqual([CHAT]);
+  });
+});

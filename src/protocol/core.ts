@@ -29,6 +29,8 @@ export interface Connection {
 export interface CoreOptions {
   backend: Backend;
   store?: ChannelStoreOptions;
+  // How long a chat nobody watches stays attached; clients that resubscribe at once then keep the attach.
+  detachGraceMs?: number;
 }
 
 const MAX_REMEMBERED_CLIENTS = 1024;
@@ -40,12 +42,15 @@ export class ProtocolCore {
   private readonly connections = new Set<Connection>();
   private readonly subscribers = new Map<string, Set<Connection>>();
   private readonly attaching = new Map<string, Promise<void>>();
+  private readonly detachTimers = new Map<string, NodeJS.Timeout>();
+  private readonly detachGraceMs: number;
   private readonly clientVersions = new Map<string, string>();
   private nextConnectionId = 1;
 
   constructor(options: CoreOptions) {
     this.backend = options.backend;
     this.store = new ChannelStore(options.store);
+    this.detachGraceMs = options.detachGraceMs ?? 0;
   }
 
   async start(): Promise<void> {
@@ -188,6 +193,8 @@ export class ProtocolCore {
 
   // Adds the subscription synchronously so no action can fall between snapshot and delivery.
   join(connection: Connection, uri: string): void {
+    clearTimeout(this.detachTimers.get(uri));
+    this.detachTimers.delete(uri);
     let set = this.subscribers.get(uri);
     if (!set) {
       set = new Set();
@@ -208,8 +215,23 @@ export class ProtocolCore {
     }
     if (set.size === 0) {
       this.subscribers.delete(uri);
-      this.detach(uri);
+      this.scheduleDetach(uri);
     }
+  }
+
+  // Only chats wait: attaching one replays its history, while an unwatched session channel goes stale and is rebuilt.
+  private scheduleDetach(uri: string): void {
+    if (this.detachGraceMs <= 0 || channelKind(uri) !== "chat") {
+      this.detach(uri);
+      return;
+    }
+    clearTimeout(this.detachTimers.get(uri));
+    const timer = setTimeout(() => {
+      this.detachTimers.delete(uri);
+      this.detachIfIdle(uri);
+    }, this.detachGraceMs);
+    timer.unref();
+    this.detachTimers.set(uri, timer);
   }
 
   // For a subscribe that finished attaching after its connection went away.

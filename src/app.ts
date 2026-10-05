@@ -16,6 +16,9 @@ import { HydraRest } from "./hydra/rest.js";
 import { HydraSessions } from "./hydra/sessions.js";
 import { checkHydraVersion } from "./hydra/version.js";
 import { ErrorCodes, RpcError } from "./rpc/peer.js";
+
+// VS Code drops and retakes chat subscriptions in bursts; detaching on each would replay the chat's history every time.
+const DETACH_GRACE_MS = 5_000;
 import { logger, setDebug } from "./util/log.js";
 
 const log = logger("app");
@@ -70,7 +73,7 @@ export async function startApp(config: Config, version: string): Promise<App> {
   const files = new FileService({ sessions: catalog, dirRoots: config.dirRoots });
   const terminals = new TerminalService();
   const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, permissionDelayMs: config.permissionDelayMs });
-  const core = new ProtocolCore({ backend });
+  const core = new ProtocolCore({ backend, detachGraceMs: DETACH_GRACE_MS });
   await core.start();
 
   const listener = new AhpListener({ core, tokens, port: config.port });

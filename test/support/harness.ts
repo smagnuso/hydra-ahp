@@ -145,13 +145,14 @@ export interface Harness {
 export interface HarnessOptions {
   backend?: FakeBackendOptions;
   store?: ChannelStoreOptions;
+  detachGraceMs?: number;
 }
 
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "ahp-test-"));
   const tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
   const backend = new FakeBackend(options.backend);
-  const core = new ProtocolCore({ backend, store: options.store });
+  const core = new ProtocolCore({ backend, store: options.store, detachGraceMs: options.detachGraceMs });
   await core.start();
   const listener = new AhpListener({ core, tokens });
   const port = await listener.listen();
