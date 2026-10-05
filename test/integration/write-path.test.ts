@@ -155,12 +155,20 @@ describe("write path against a scratch daemon", () => {
     const view = await open();
     const release = gate();
     driver.permissionAnswer = "hold";
+    const updatesBefore = driver.updates.length;
     await view.startTurn("ahp-away", `script:gate ${release.path} then-ask`);
     await view.until("turn running", (chat) => chat.activeTurn?.id === "ahp-away");
     await view.close();
     views.splice(views.indexOf(view), 1);
     release.open();
-    await until("driver holds the request", () => driver.held.length === 1);
+    // This has timed out on CI runners but never locally; on a timeout, report where the turn got to.
+    await until("driver holds the request", () => driver.held.length === 1).catch(async (err: Error) => {
+      const row = await daemon.admin.getSession(view.id).catch(() => undefined);
+      throw new Error(
+        `${err.message}; held=${driver.held.length} permissions=${driver.permissions.length} busy=${String(row?.busy)} ` +
+          `attached=${String(row?.attachedClients)} agent said=${JSON.stringify(driver.textSince(view.id, updatesBefore))}`,
+      );
+    });
     // Anything but -32601 from the extension would already have settled the race.
     await sleep(500);
     driver.held.shift()!.answer("reject");
