@@ -47,7 +47,10 @@ describe("terminals", () => {
 
     session.client.dispatch(TERMINAL, act({ type: "terminal/resized", cols: 100, rows: 40 }));
     session.client.dispatch(TERMINAL, act({ type: "terminal/input", data: SHOW }));
-    await session.waitFor(() => output(harness.core.store.state(TERMINAL) as TerminalState).includes("hi-42"), 5000);
+    await session.waitFor(() => {
+      const shown = output(harness.core.store.state(TERMINAL) as TerminalState);
+      return shown.includes("hi-42") && shown.includes(basename(dir));
+    }, 5000);
     const state = harness.core.store.state(TERMINAL) as TerminalState;
     expect(output(state)).toContain(basename(dir));
     expect(state.cols).toBe(100);

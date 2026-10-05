@@ -365,7 +365,8 @@ describe("idle close and session GC against a scratch daemon", () => {
 
     await driver.attach(id);
     await driver.prompt(id, "from hydra");
-    const resumed = await view.until("turn after resurrect", (chat) => chat.turns.find((turn) => turn.message.text === "from hydra" && turn.state === "complete"));
+    // Waking a cold session respawns its agent, which is slow on Windows runners.
+    const resumed = await view.until("turn after resurrect", (chat) => chat.turns.find((turn) => turn.message.text === "from hydra" && turn.state === "complete"), 30_000);
     expect(markdown(resumed.responseParts)).toBe("pong");
     await driver.detach(id);
 
