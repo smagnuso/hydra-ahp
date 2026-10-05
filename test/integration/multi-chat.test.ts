@@ -174,13 +174,13 @@ describe("several chats in one session against a scratch daemon", () => {
     await until("attachment released", async () => ((await daemon.admin.getSession(row.sessionId)).attachedClients === 0 ? true : undefined));
   });
 
-  it("answers resolveSessionConfig with an empty schema", async () => {
+  it("answers resolveSessionConfig with no more than the agent switch for an agent without options", async () => {
     const result = (await ahp.session.client.request("resolveSessionConfig", { channel: ROOT, provider: "fake" } as never)) as unknown as {
       schema: { type: string; properties: Record<string, unknown> };
       values: Record<string, unknown>;
     };
-    expect(result.schema).toEqual({ type: "object", properties: {} });
-    expect(result.values).toEqual({});
+    expect(result.schema.type).toBe("object");
+    expect(Object.keys(result.schema.properties).filter((key) => key !== "acp.agent")).toEqual([]);
   });
 
   it("removes one chat, promotes the next default, and removes the session with its last chat", async () => {

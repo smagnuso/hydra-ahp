@@ -43,11 +43,11 @@ describe("toConfigState", () => {
     });
   });
 
-  it("leaves out the model and the agent, and is absent when nothing is left", () => {
+  it("leaves out the model, keeps Hydra's agent switch, and is absent when nothing is left", () => {
     const model = { ...effort, id: "model" };
     const agent = { ...effort, id: "agent" };
-    expect(toConfigState(parseConfigOptions([model, agent]))).toBeUndefined();
-    expect(Object.keys(toConfigState(parseConfigOptions([model, effort, agent]))?.schema.properties ?? {})).toEqual(["acp.effort"]);
+    expect(toConfigState(parseConfigOptions([model]))).toBeUndefined();
+    expect(Object.keys(toConfigState(parseConfigOptions([model, agent, effort]))?.schema.properties ?? {})).toEqual(["acp.agent", "acp.effort"]);
   });
 
   it("maps property ids back to Hydra's option ids", () => {

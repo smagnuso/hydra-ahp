@@ -166,6 +166,10 @@ export class SessionBridge implements SessionListener {
     return this.deps.chatUri;
   }
 
+  get session(): string {
+    return this.deps.sessionUri;
+  }
+
   get isAttached(): boolean {
     return this.attached;
   }

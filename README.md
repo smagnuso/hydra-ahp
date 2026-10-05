@@ -144,8 +144,10 @@ token leaks, `token revoke <id>` closes its connections immediately.
   first session on this host (kept in `models.json`).
 - Settings: every option the underlying agent advertises (effort, fast mode,
   session mode, ...) is a session setting a client can show and change, named
-  `acp.<option id>`. The model and Hydra's agent switch are left out (the model
-  has its own picker, the agent is the session's provider). A session's
+  `acp.<option id>`, along with Hydra's own agent switch (`acp.agent`). The model
+  is left out because it has its own picker. A session's URI scheme is its agent,
+  so switching the agent moves the session to a new URI: clients see it removed
+  and listed again under the new agent. A session's
   settings come from attaching to it, so a cold session shows none until it has
   been opened live, and a setting that appears or disappears while a client is
   subscribed (AHP cannot update the schema, only the values) shows up on the
