@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { ModelStore } from "../../src/store/models.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Catalog } from "../../src/bridge/catalog.js";
@@ -115,6 +116,7 @@ export class FakeHydra {
   rest = {
     listSessions: async () => ({ sessions: this.rows, removed: [], cursor: 1 }),
     agents: async () => ({ agents: [] }),
+    config: async () => ({}),
     historyPage: async (_id: string, beforeSeq: number, turns?: number) => {
       this.pageCalls.push({ beforeSeq, ...(turns !== undefined ? { turns } : {}) });
       if (beforeSeq === Number.MAX_SAFE_INTEGER) {
@@ -157,15 +159,16 @@ export const ROW = (overrides: Partial<HydraSessionEntry> = {}): HydraSessionEnt
 
 export async function startBridgeHarness(
   setup: (hydra: FakeHydra) => void = () => undefined,
-  options: { permissionDelayMs?: number } = {},
+  options: { permissionDelayMs?: number; models?: ModelStore } = {},
 ): Promise<BridgeHarness> {
   const hydra = new FakeHydra();
   hydra.rows = [ROW()];
   setup(hydra);
   const dir = mkdtempSync(join(tmpdir(), "ahp-bridge-"));
   const tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
-  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40 });
-  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ shell: "/bin/sh", orphanGraceMs: 200 }), ...options });
+  const { models, ...backendOptions } = options;
+  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}) });
+  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ shell: "/bin/sh", orphanGraceMs: 200 }), ...backendOptions });
   const core = new ProtocolCore({ backend });
   await core.start();
   const listener = new AhpListener({ core, tokens });

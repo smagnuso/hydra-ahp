@@ -48,6 +48,12 @@ export interface HydraAgent {
   version?: string;
   description?: string;
   installed?: "yes" | "no" | "lazy";
+  // Most specific first: the agent's own id, then each id it extends.
+  extendsChain?: string[];
+}
+
+export interface HydraConfig {
+  sessionDefaults?: Record<string, Record<string, string>>;
 }
 
 export interface HistoryPage {
@@ -146,6 +152,10 @@ export class HydraRest {
 
   agents(): Promise<{ agents: HydraAgent[] }> {
     return this.request("GET", "/v1/agents");
+  }
+
+  config(): Promise<HydraConfig> {
+    return this.request("GET", "/v1/config");
   }
 
   historyPage(id: string, beforeSeq: number, turns?: number): Promise<HistoryPage> {

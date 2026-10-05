@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ModelStore } from "../src/store/models.js";
+import { sleep } from "./support/harness.js";
 import { startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 
 describe("default model", () => {
@@ -36,7 +37,10 @@ describe("default model", () => {
     expect(harness.catalog.agents()[0]?.models.map((model) => model.id)).toEqual(["luna", "image"]);
 
     defaults = { "fake-dev": { model: "nova" } };
-    await harness.catalog.refreshAgentsNow();
-    expect(harness.catalog.agents()[0]?.models.map((model) => model.id)).toEqual(["nova", "image", "luna"]);
+    const ids = (): string[] | undefined => harness?.catalog.agents()[0]?.models.map((model) => model.id);
+    for (let tries = 0; tries < 100 && ids()?.[0] !== "nova"; tries += 1) {
+      await sleep(20);
+    }
+    expect(ids()).toEqual(["nova", "image", "luna"]);
   });
 });

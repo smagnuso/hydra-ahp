@@ -68,6 +68,7 @@ export class Catalog {
   private cursor: number | undefined;
   private polls = 0;
   private rawAgents: HydraAgent[] = [];
+  private sessionDefaults: Record<string, Record<string, string>> = {};
   private agentList: AgentInfo[] = [];
   private pollTimer: NodeJS.Timeout | undefined;
   private warmTimer: NodeJS.Timeout | undefined;
@@ -440,19 +441,45 @@ export class Catalog {
   }
 
   private async refreshAgents(): Promise<void> {
-    this.rawAgents = (await this.rest.agents()).agents;
+    await this.loadAgents();
     this.republishAgents();
   }
 
   private async fetchAgents(): Promise<AgentInfo[]> {
-    this.rawAgents = (await this.rest.agents()).agents;
+    await this.loadAgents();
     return this.buildAgents();
+  }
+
+  // Hydra reloads sessionDefaults while it runs, so they are read again with every agent refresh.
+  private async loadAgents(): Promise<void> {
+    const [agents, config] = await Promise.all([
+      this.rest.agents(),
+      this.rest.config().catch((err: unknown) => {
+        log.debug("could not read Hydra's config", err instanceof Error ? err.message : err);
+        return undefined;
+      }),
+    ]);
+    this.rawAgents = agents.agents;
+    if (config?.sessionDefaults) {
+      this.sessionDefaults = config.sessionDefaults;
+    }
   }
 
   private buildAgents(): AgentInfo[] {
     return this.rawAgents
       .filter((agent) => agent.installed !== "no")
-      .map((agent) => toAgentInfo(agent, this.options.models?.get(agent.id) ?? []));
+      .map((agent) => toAgentInfo(agent, defaultFirst(this.options.models?.get(agent.id) ?? [], this.defaultModelOf(agent))));
+  }
+
+  // VS Code picks the first model for a new session, so the one Hydra would seed it with goes first.
+  private defaultModelOf(agent: HydraAgent): string | undefined {
+    for (const id of agent.extendsChain ?? [agent.id]) {
+      const model = this.sessionDefaults[id]?.model;
+      if (model) {
+        return model;
+      }
+    }
+    return undefined;
   }
 
   private republishAgents(): void {
@@ -593,6 +620,14 @@ function sideOrigin(value: unknown): SideOrigin | undefined {
 
 export function sideChatOrigin(side: SideOrigin): Record<string, unknown> {
   return { kind: "sideChat", chat: side.chat, turnId: side.turnId, ...(side.selection ? { selection: side.selection } : {}) };
+}
+
+function defaultFirst(models: readonly KnownModel[], model: string | undefined): readonly KnownModel[] {
+  if (!model) {
+    return models;
+  }
+  const known = models.find((entry) => entry.id === model) ?? { id: model, name: model };
+  return [known, ...models.filter((entry) => entry.id !== model)];
 }
 
 function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[]): AgentInfo {
