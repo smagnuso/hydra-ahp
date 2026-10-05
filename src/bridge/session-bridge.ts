@@ -1,4 +1,6 @@
 import type { ChatState, SessionState, StateAction, ToolCallState } from "@microsoft/agent-host-protocol";
+import { isFederatedId } from "./ids.js";
+import type { EditContentStore } from "./edit-content.js";
 import type { HydraSessionEntry, HydraRest } from "../hydra/rest.js";
 import type { HydraSessions, QueueEvent, SessionListener, SteeringResult } from "../hydra/sessions.js";
 import type { ActionDecision } from "../protocol/backend.js";
@@ -103,6 +105,7 @@ export interface BridgeDeps {
   rest: HydraRest;
   sessions: HydraSessions;
   permissionDelayMs?: number;
+  edits?: EditContentStore;
 }
 
 const action = (value: Json) => value as never;
@@ -131,7 +134,7 @@ function maxSeq(frames: readonly Frame[]): number | undefined {
 // reorders seq values, so neither order nor seq can tell a late replay frame from a fresh live one. The page read is
 // ordered and its highest seq is a sound line between "already read" and "live".
 export class SessionBridge implements SessionListener {
-  private mapper = new ChatMapper();
+  private mapper: ChatMapper;
   private attached = false;
   private mode: "live" | "viewer" | undefined;
   private unlisten: (() => void) | undefined;
@@ -159,7 +162,14 @@ export class SessionBridge implements SessionListener {
   private headless = false;
   commands: unknown;
 
-  constructor(private readonly deps: BridgeDeps) {}
+  constructor(private readonly deps: BridgeDeps) {
+    this.mapper = this.newMapper();
+  }
+
+  private newMapper(): ChatMapper {
+    const store = this.deps.edits;
+    return new ChatMapper(store ? { edits: { chatUri: this.deps.chatUri, put: (uri, text) => store.put(uri, text) } } : {});
+  }
 
   get hydraId(): string {
     return this.deps.hydraId;
@@ -330,7 +340,7 @@ export class SessionBridge implements SessionListener {
     const held = core.store.state(chatUri) as ChatState | undefined;
     const subscribed = core.hasSubscribers(chatUri) && held !== undefined;
     const aliases = this.mapper.aliases;
-    this.mapper = new ChatMapper();
+    this.mapper = this.newMapper();
     for (const [messageId, turnId] of aliases) {
       this.mapper.aliases.set(messageId, turnId);
     }
@@ -613,6 +623,9 @@ export class SessionBridge implements SessionListener {
     const value = body[flag] as boolean;
     const { core, catalog, hydraId, sessionUri, chatUri } = this.deps;
     catalog.setFlags(hydraId, { [flag]: value });
+    if (flag === "isArchived" && value) {
+      void this.retireIfIdle().catch((err) => log.debug(`letting ${hydraId} go cold failed`, message(err)));
+    }
     const bit = flag === "isRead" ? STATUS_IS_READ : STATUS_IS_ARCHIVED;
     // Only the default chat shares its marks with the session.
     const shared = catalog.isDefaultMember(hydraId);
@@ -626,6 +639,19 @@ export class SessionBridge implements SessionListener {
       }
     }
     return ACCEPT;
+  }
+
+  // Done means the agent can stop: a live session that is not working goes cold, keeping its record; any client can warm it again.
+  private async retireIfIdle(): Promise<void> {
+    const { rest, hydraId } = this.deps;
+    if (isFederatedId(hydraId)) {
+      return;
+    }
+    const entry = await rest.getSession(hydraId);
+    if (entry.status !== "warm" || entry.busy || entry.awaitingInput || entry.remote !== undefined) {
+      return;
+    }
+    await rest.killSession(hydraId);
   }
 
   // The default chat names the session; any other chat only names itself.

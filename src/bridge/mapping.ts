@@ -10,6 +10,8 @@ import {
   type Json,
   type TurnContext,
 } from "./turns.js";
+import { editContentUri } from "./edit-content.js";
+import { cwdToUri } from "./ids.js";
 
 export interface Frame {
   update: Json;
@@ -19,6 +21,8 @@ export interface Frame {
 
 export interface MapperOptions {
   clock?: () => number;
+  // Where an edit's before and after text is kept for clients to diff; without it edits show as unified-diff text.
+  edits?: { chatUri: string; put: (uri: string, text: string) => void };
 }
 
 const MAX_OUTPUT_CHARS = 20_000;
@@ -75,12 +79,39 @@ function countLines(value: string): number {
   return value === "" ? 0 : value.split("\n").length;
 }
 
-// A diff without a before side is a creation and can point at the file; any other edit is shown as a unified diff.
-function contentBlocks(content: unknown): Json[] {
+// The line counts the daemon recorded for each edit an update carries, in order.
+function editStatsOf(update: Json): Array<{ path: string; added: number; removed: number }> {
+  const stats = bag(bag(update._meta)[HYDRA_META]).editStats;
+  return (Array.isArray(stats) ? stats : []).flatMap((raw) => {
+    const s = bag(raw);
+    return typeof s.path === "string" && typeof s.added === "number" && typeof s.removed === "number"
+      ? [{ path: s.path, added: s.added, removed: s.removed }]
+      : [];
+  });
+}
+
+type EditBlock = (path: string, before: string | undefined, after: string, counts: { added: number; removed: number } | undefined) => Json;
+
+// Without an edit handler, a diff without a before side is a creation pointing at the file and any other edit is unified-diff text.
+function plainEdit(path: string, before: string | undefined, after: string): Json {
+  if (before === undefined) {
+    return {
+      type: "fileEdit",
+      after: { uri: `file://${path}`, content: { uri: `file://${path}` } },
+      diff: { added: countLines(after), removed: 0 },
+    };
+  }
+  return { type: "text", text: diffText(path, before, after) };
+}
+
+function contentBlocks(update: Json, edit?: EditBlock): Json[] {
   const blocks: Json[] = [];
+  const content = update.content;
   if (!Array.isArray(content)) {
     return blocks;
   }
+  const stats = editStatsOf(update);
+  const seen = new Map<string, number>();
   for (const raw of content) {
     const entry = bag(raw);
     if (entry.type === "content") {
@@ -92,15 +123,10 @@ function contentBlocks(content: unknown): Json[] {
       const path = entry.path;
       const before = typeof entry.oldText === "string" ? entry.oldText : undefined;
       const after = typeof entry.newText === "string" ? entry.newText : "";
-      if (before === undefined) {
-        blocks.push({
-          type: "fileEdit",
-          after: { uri: `file://${path}`, content: { uri: `file://${path}` } },
-          diff: { added: countLines(after), removed: 0 },
-        });
-      } else {
-        blocks.push({ type: "text", text: diffText(path, before, after) });
-      }
+      const occurrence = seen.get(path) ?? 0;
+      seen.set(path, occurrence + 1);
+      const counts = stats.filter((s) => s.path === path)[occurrence];
+      blocks.push(edit ? edit(path, before, after, counts && { added: counts.added, removed: counts.removed }) : plainEdit(path, before, after));
     }
   }
   return blocks;
@@ -148,7 +174,7 @@ export class ChatMapper {
   // Hydra messageIds of turns AHP clients started, mapped to the client's turnId.
   readonly aliases = new Map<string, string>();
 
-  constructor(options: MapperOptions = {}) {
+  constructor(private readonly options: MapperOptions = {}) {
     this.clock = options.clock ?? Date.now;
   }
 
@@ -324,6 +350,12 @@ export class ChatMapper {
     }
     call.asked = true;
     const title = text(toolCall.title);
+    const editBlock = this.editBlock(toolCallId);
+    const edits = editBlock
+      ? contentBlocks(toolCall, editBlock)
+          .filter((block) => block.type === "fileEdit")
+          .map(({ type: _type, ...edit }) => edit)
+      : [];
     actions.push({
       type: "chat/toolCallReady",
       turnId: turn.id,
@@ -331,6 +363,7 @@ export class ChatMapper {
       invocationMessage: call.displayName,
       ...(title ? { confirmationTitle: title } : {}),
       ...(call.input === undefined ? {} : { toolInput: call.input }),
+      ...(edits.length > 0 ? { edits: { items: edits } } : {}),
       ...(options.length > 0 ? { options } : {}),
       ...this.callMeta(call),
     });
@@ -481,6 +514,8 @@ export class ChatMapper {
   private callOf(turn: TurnContext, update: Json): Call {
     const known = turn.calls.get(String(update.toolCallId));
     if (known) {
+      // Agents often open a call with a placeholder title ("Preparing file…") and name it once the input is known.
+      known.displayName = text(update.title) ?? known.displayName;
       return known;
     }
     const id = String(update.toolCallId);
@@ -504,6 +539,31 @@ export class ChatMapper {
       times.durationMs = Math.max(0, call.endedAt - call.startedAt);
     }
     return { _meta: { [HYDRA_META]: times } };
+  }
+
+  // A fileEdit whose before and after are kept in the edit store, so a client diffs them in its own viewer.
+  private editBlock(toolCallId: string): EditBlock | undefined {
+    const edits = this.options.edits;
+    if (!edits) {
+      return undefined;
+    }
+    let index = 0;
+    return (path, before, after, counts) => {
+      const n = index++;
+      const fileUri = cwdToUri(path);
+      const side = (name: "old" | "new", body: string): Json => {
+        const uri = editContentUri(edits.chatUri, toolCallId, n, name);
+        edits.put(uri, body);
+        return { uri: fileUri, content: { uri } };
+      };
+      const diff = counts ?? (before === undefined ? { added: countLines(after), removed: 0 } : undefined);
+      return {
+        type: "fileEdit",
+        ...(before === undefined ? {} : { before: side("old", before) }),
+        after: side("new", after),
+        ...(diff ? { diff } : {}),
+      };
+    };
   }
 
   private toolStart(turn: TurnContext, call: Call): Json {
@@ -594,7 +654,7 @@ export class ChatMapper {
     if (arrived !== undefined) {
       call.input = arrived;
     }
-    const blocks = contentBlocks(update.content);
+    const blocks = contentBlocks(update, this.editBlock(update.toolCallId as string));
     if (blocks.length > 0) {
       call.content = blocks;
     }

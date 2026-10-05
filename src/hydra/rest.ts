@@ -142,6 +142,11 @@ export class HydraRest {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(id)}/side`, body);
   }
 
+  // Demotes a live session to cold: the agent exits, the record stays and the session resumes on demand.
+  killSession(id: string): Promise<void> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(id)}/kill`);
+  }
+
   deleteSession(id: string): Promise<void> {
     return this.request("DELETE", `/v1/sessions/${encodeURIComponent(id)}`);
   }

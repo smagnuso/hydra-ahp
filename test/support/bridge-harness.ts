@@ -133,8 +133,14 @@ export class FakeHydra {
     deleteSession: async (id: string) => {
       this.writes.push({ method: "DELETE", id });
     },
+    killSession: async (id: string) => {
+      this.writes.push({ method: "KILL", id });
+    },
+    getSession: async (id: string) => ({ ...(this.rows.find((row) => row.sessionId === id) ?? {}), ...this.live }),
   } as unknown as HydraRest;
 
+  // What GET /v1/sessions/:id adds to a row: Hydra's live view of who is attached and whether it is working.
+  live: Partial<HydraSessionEntry> = { status: "warm", attachedClients: 1 };
   readonly buckets = new Map<string, Record<string, unknown>>();
   readonly edited = new Map<string, string[]>();
   extState = {

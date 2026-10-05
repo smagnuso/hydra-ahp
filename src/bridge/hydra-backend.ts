@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { EditContentStore, isEditContentUri } from "./edit-content.js";
 import type {
   ListSessionsParams,
   ListSessionsResult,
@@ -67,6 +68,7 @@ export class HydraBackend implements Backend {
   private readonly files: FileService;
   private readonly terminals: TerminalService | undefined;
   private readonly changesets: ChangesetService | undefined;
+  private readonly edits = new EditContentStore();
   private readonly permissionDelayMs: number;
 
   constructor(options: HydraBackendOptions) {
@@ -115,6 +117,7 @@ export class HydraBackend implements Backend {
         rest: this.rest,
         sessions: this.sessions,
         permissionDelayMs: this.permissionDelayMs,
+        edits: this.edits,
       });
       this.bridges.set(hydraId, bridge);
     }
@@ -300,6 +303,9 @@ export class HydraBackend implements Backend {
     const target = (params as { uri?: unknown } | undefined)?.uri;
     if (method === "resourceRead" && this.changesets?.ownsContent(target)) {
       return this.changesets.read(target, (params as { encoding?: unknown }).encoding);
+    }
+    if (method === "resourceRead" && isEditContentUri(target)) {
+      return this.edits.read(target, (params as { encoding?: unknown }).encoding);
     }
     if (this.files.handles(method)) {
       return this.files.handle(method, params, client);

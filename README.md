@@ -102,7 +102,9 @@ never-prompted ones from every client.
 
 The same verbs work from any hydra client as `/hydra ahp token ...`.
 `token list` shows the tokens, and `token revoke <id>` revokes one and closes
-its connections at once. Tokens renew themselves on use, so you only re-paste
+its connections at once. VS Code keeps reconnecting with the token it connected with,
+so after swapping the token in its settings, reload the window (or remove and
+add the host again). Tokens renew themselves on use, so you only re-paste
 after 90 idle days or a revoke. They do not appear in `hydra-acp auth list`.
 
 ### Token levels
@@ -143,6 +145,19 @@ a chat deletes its hydra session, and deleting the session deletes them all.
 A session lives at `<agent>:/<hydra session id>`, because VS Code picks the
 content provider by the URI's scheme.
 
+A message sent while the agent is working steers the running turn. AHP has no
+place for a message in the middle of a turn, so, as VS Code's own host does, the
+running turn ends there and the steering message opens a new one. Steers sent
+from the TUI or another client show up the same way.
+
+Marking a chat read or done sticks: local sessions keep the mark in their own
+hydra `extension_state` (so it goes away with the session), federated sessions
+in this extension's `flags.json`. Hydra itself has no notion of done, so marking
+a chat done also lets its agent stop: if the hydra session is idle, it goes
+cold, keeping its record, and any client (the TUI, the browser) can resume it.
+A busy session keeps running. Pins are VS Code's
+own and never reach hydra.
+
 ### Settings
 
 Every option the underlying agent advertises through hydra (effort, fast mode,
@@ -150,6 +165,12 @@ session mode, and so on) appears as a picker under the chat input, along with
 hydra's own agent switch. The model has its own picker. Changing a setting goes
 through hydra to the agent, and the picker then shows what the agent reports
 (an agent may adjust other settings in response).
+
+VS Code takes a chat's model from its turns and sends it with every prompt, so
+hydra-ahp stamps the session's current model on its turns; otherwise VS Code
+would fall back to the model it last used for that agent and switch the session
+to it. For a new session VS Code picks the first model listed, so each agent's
+default (hydra's `sessionDefaults`, through `extends`) is listed first.
 
 Switching the agent moves the session to the new agent's URI, so VS Code shows
 it removed and listed again under the new agent. A session's settings come from
@@ -173,6 +194,25 @@ session.
 Terminals need `node-pty`, an optional dependency; without it they are
 unavailable.
 
+### Changes
+
+The Changes tab shows two changesets for each local session whose working
+directory is in a git repository:
+
+- **Session Changes**: the files the agent edited in this session, as hydra
+  aggregates them from its tool calls, each compared whole with the commit the
+  branch was at when the session was created. Commits made since do not hide
+  them. Your own edits to those files show too, and files changed only by shell
+  commands do not.
+- **Uncommitted Changes**: everything in the repository that differs from
+  `HEAD`, staged, unstaged or untracked; a commit clears it.
+
+Both refresh every couple of seconds while watched. They only read the
+repository: there are no review checkboxes and no commit or discard buttons.
+Federated and remote sessions get none, since their files are elsewhere. Session
+Changes needs a hydra that reports when each session was created; on an older
+one every edited file shows as new.
+
 ## How it works
 
 ```
@@ -190,9 +230,10 @@ hydra-ahp is a hydra client downstream: it lists sessions over REST and
 attaches to each session VS Code opens over `/acp`, mapping ACP updates to AHP
 chat actions through the official AHP reducers. Upstream it is an AHP host:
 version negotiation, subscriptions with replay, and client actions validated
-before they reach hydra. Read and archive marks, the agents' model lists and
-their option sets are kept in its own files under
-`~/.hydra-acp/extensions/ahp/`, all mode 0600.
+before they reach hydra. The agents' model lists and option sets, and the read
+and done marks of federated sessions, are kept in its own files under
+`~/.hydra-acp/extensions/ahp/`, all mode 0600; everything else it records lives
+in each session's hydra `extension_state`.
 
 ## Configuration keys
 
@@ -280,10 +321,12 @@ a fake agent, and never touch `~/.hydra-acp`.
 Experimental. Covers session listing, live transcripts, prompting, steering,
 queued messages, cancel, permissions, settings and model pickers, read and
 archive marks, several chats per session (forks and side chats), file reads and
-`@` completions, and terminals. Out of scope: changesets, automations,
-customizations, file watches, elicitation (`chat/inputRequested`, which hydra
-has no counterpart for), moving chats between sessions, and creating sessions
-on federated remotes (existing federated sessions are listed and driven).
+`@` completions, terminals, and session and uncommitted changesets. Out of
+scope: per-turn and branch changesets, changeset review and operations,
+automations, customizations, file watches, elicitation (`chat/inputRequested`,
+which hydra has no counterpart for), moving chats between sessions, and creating
+sessions on federated remotes (existing federated sessions are listed and
+driven).
 
 ## License
 
