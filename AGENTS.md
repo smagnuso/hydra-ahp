@@ -83,6 +83,24 @@ with command `hydra-ahp`.
   cold non-interactive ones; `PATCH /v1/sessions/:id` bumps `updatedAt`.
 - **`usage_update` is broadcast but never recorded** in Hydra history; attach
   a live observer to see it.
+- **Hydra idle-closes sessions with attached observers**: a watched,
+  never-prompted session can be GC'd while subscribed; the bridge disposes
+  the chat and clients get `root/sessionRemoved`.
+- **`connection.ts` re-validates client actions after the backend accepts**:
+  slow decide work can get a client's own action rejected if state moves
+  underneath (this is why `turnCancelled` is accepted at once and
+  `session/cancel` runs afterwards as a followUp on the write chain).
+- **Cancel is asynchronous**: Hydra is not idle right after a cancel; tests
+  must poll. `session/cancel` is skipped if a new turn became active during
+  the permission settle wait.
+- **Steering chip removal is deferred** (`setImmediate`): the injected or
+  detached reply can arrive before the client's `pendingMessageSet` lands.
+- **Daemon restart**: the extension exits on losing Hydra and the new daemon
+  relaunches it; the wall-clock `serverSeq` base forces snapshots over
+  replay. There is no in-process reconnect.
+- **Token levels gate `resource*`**: `scoped` (default), `read`, `full`;
+  `createResourceWatch` is `-32601` at every level. The `ahp` extension
+  name, not `hydra-ahp`, gives `/hydra ahp token ...`.
 
 ## Updating this file
 
