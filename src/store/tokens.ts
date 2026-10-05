@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 export type FileLevel = "scoped" | "read" | "full";
 
-export const FILE_LEVELS: readonly FileLevel[] = ["scoped", "read", "full"];
+export const FILE_LEVELS: readonly FileLevel[] = ["full", "read", "scoped"];
 
 export const DEFAULT_IDLE_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -66,7 +66,7 @@ export class TokenRegistry {
     this.load();
   }
 
-  mint(label: string, level: FileLevel = "scoped"): MintedToken {
+  mint(label: string, level: FileLevel = "full"): MintedToken {
     if (!isFileLevel(level)) {
       throw new Error(`invalid file level: ${String(level)}`);
     }

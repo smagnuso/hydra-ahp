@@ -170,7 +170,7 @@ export async function startBridgeHarness(
   await core.start();
   const listener = new AhpListener({ core, tokens });
   const port = await listener.listen();
-  const token = tokens.mint("test").token;
+  const token = tokens.mint("test", "scoped").token;
   const fullToken = tokens.mint("full", "full").token;
   const opened: Session[] = [];
   return {

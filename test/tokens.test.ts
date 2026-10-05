@@ -25,9 +25,9 @@ describe("TokenRegistry", () => {
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 
-  it("defaults to the scoped level and rejects unknown levels", () => {
+  it("defaults to the full level and rejects unknown levels", () => {
     const { registry } = setup();
-    expect(registry.mint("a").info.level).toBe("scoped");
+    expect(registry.mint("a").info.level).toBe("full");
     expect(() => registry.mint("b", "root" as never)).toThrow();
   });
 

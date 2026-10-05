@@ -4,7 +4,7 @@ export const COMMAND_VERB = "token";
 
 export const COMMAND_SPEC = {
   verb: COMMAND_VERB,
-  argsHint: "mint <label> [--files scoped|read|full] | url [label] | list | revoke <id>",
+  argsHint: "mint <label> [--files full|read|scoped] | url [label] | list | revoke <id>",
   description: "Manage the AHP connection tokens (VS Code chat.remoteAgentHosts)",
 };
 
@@ -17,7 +17,7 @@ export interface TokenCommandContext {
 
 function parseMint(words: string[], defaultLabel?: string): { label: string; level: FileLevel } | string {
   const label: string[] = [];
-  let level: FileLevel = "scoped";
+  let level: FileLevel = "full";
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i] as string;
     let value: string | undefined;

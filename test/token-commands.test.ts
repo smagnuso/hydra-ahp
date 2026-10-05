@@ -38,10 +38,10 @@ describe("token verbs", () => {
     expect(tokens.list().map((t) => t.label)).toContain("laptop");
   });
 
-  it("defaults to the scoped level and rejects bad input", () => {
+  it("defaults to the full level and rejects bad input", () => {
     const { run, tokens } = setup();
     run("mint vscode");
-    expect(tokens.list()[0]?.level).toBe("scoped");
+    expect(tokens.list()[0]?.level).toBe("full");
     expect(run("mint")).toContain("a label is required");
     expect(run("mint x --files wide")).toContain("--files must be one of");
     expect(run("mint x --bogus")).toContain("unknown option");
