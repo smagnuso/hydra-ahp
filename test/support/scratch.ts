@@ -1,9 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, scryptSync } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cwdToUri } from "../../src/bridge/ids.js";
 import { HydraClient } from "../../src/hydra/client.js";
@@ -109,7 +109,7 @@ export class ScratchDaemon {
     writeFileSync(
       join(home, "config.json"),
       JSON.stringify({
-        daemon: { port, ...options.daemon },
+        daemon: { port, logLevel: "debug", ...options.daemon },
         registry: { pinned: true },
         defaultAgent: "fake",
         agents: {
@@ -188,12 +188,33 @@ export class ScratchDaemon {
     }
   }
 
-  // The daemon's and the extension's log lines that mention a string, for explaining a failure on a CI runner.
+  // Every log file the daemon and its extensions wrote, oldest rotation first; current.log is a symlink, which Windows may not have.
+  private logFiles(): string[] {
+    const found: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(path);
+        } else if (entry.isFile() && entry.name.endsWith(".log")) {
+          found.push(path);
+        }
+      }
+    };
+    try {
+      walk(this.home);
+    } catch {
+      return [];
+    }
+    return found.sort();
+  }
+
+  // The log lines that mention a string, for explaining a failure on a CI runner.
   logLines(match: string, limit = 80): string {
-    const files = [join(this.home, "current.log"), join(this.home, "extensions", "ahp", "current.log")];
-    const lines = files.flatMap((file) => {
+    const lines = this.logFiles().flatMap((file) => {
+      const label = relative(this.home, file);
       try {
-        return readFileSync(file, "utf8").split("\n").filter((line) => line.includes(match)).map((line) => `${file.includes("extensions") ? "ahp" : "hydra"}: ${line}`);
+        return readFileSync(file, "utf8").split("\n").filter((line) => line.includes(match)).map((line) => `${label}: ${line}`);
       } catch {
         return [];
       }
@@ -201,8 +222,26 @@ export class ScratchDaemon {
     return lines.slice(-limit).join("\n");
   }
 
+  // Keeps the logs for CI to upload: the scratch home itself is deleted.
+  private keepLogs(): void {
+    const into = process.env.HYDRA_AHP_TEST_LOG_DIR;
+    if (!into) {
+      return;
+    }
+    for (const file of this.logFiles()) {
+      const target = join(into, basename(this.home), relative(this.home, file));
+      try {
+        mkdirSync(dirname(target), { recursive: true });
+        copyFileSync(file, target);
+      } catch {
+        // A log that cannot be kept only loses evidence.
+      }
+    }
+  }
+
   async destroy(): Promise<void> {
     await this.stop();
+    this.keepLogs();
     if (existsSync(this.home)) {
       rmSync(this.home, { recursive: true, force: true });
     }

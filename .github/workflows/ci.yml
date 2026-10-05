@@ -17,6 +17,7 @@ jobs:
         node: [20, 22]
     env:
       HYDRA_CLI_DIST: ${{ github.workspace }}/hydra-cli/dist/daemon.js
+      HYDRA_AHP_TEST_LOG_DIR: ${{ github.workspace }}/test-logs
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,6 +46,13 @@ jobs:
         working-directory: ahp
       - run: npm test
         working-directory: ahp
+      # The scratch daemons' own logs (daemon, extension, agents), which is where an integration failure is explained.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.os }}-node${{ matrix.node }}
+          path: test-logs
+          if-no-files-found: ignore
 
   # The single check the branch ruleset requires; do not rename it.
   all-checks:
