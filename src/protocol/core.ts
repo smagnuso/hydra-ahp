@@ -21,6 +21,8 @@ export interface Connection {
   clientId?: string;
   version?: string;
   subscriptions: Set<string>;
+  // Session channels where this client registered itself as an active client.
+  activeIn: Set<string>;
   closed: boolean;
 }
 
@@ -56,6 +58,7 @@ export class ProtocolCore {
       peer,
       token,
       subscriptions: new Set(),
+      activeIn: new Set(),
       closed: false,
     };
     this.connections.add(connection);
@@ -68,8 +71,19 @@ export class ProtocolCore {
     }
     connection.closed = true;
     this.connections.delete(connection);
+    for (const uri of [...connection.activeIn]) {
+      this.retireActiveClient(connection, uri);
+    }
     for (const uri of [...connection.subscriptions]) {
       this.release(connection, uri);
+    }
+  }
+
+  // The spec asks the host to remove a client's active entry when it leaves or disconnects.
+  private retireActiveClient(connection: Connection, uri: string): void {
+    connection.activeIn.delete(uri);
+    if (connection.clientId && this.store.has(uri)) {
+      this.publish(uri, { type: "session/activeClientRemoved", clientId: connection.clientId } as never);
     }
   }
 
@@ -178,6 +192,9 @@ export class ProtocolCore {
 
   release(connection: Connection, uri: string): void {
     connection.subscriptions.delete(uri);
+    if (connection.activeIn.has(uri)) {
+      this.retireActiveClient(connection, uri);
+    }
     const set = this.subscribers.get(uri);
     if (!set?.delete(connection)) {
       return;

@@ -618,6 +618,9 @@ export class SessionBridge implements SessionListener {
       if (next.type === "session/isReadChanged" || next.type === "session/isArchivedChanged") {
         return this.setFlag(channel, next.type.endsWith("isReadChanged") ? "isRead" : "isArchived", body);
       }
+      if (next.type === "session/activeClientSet" || next.type === "session/activeClientRemoved") {
+        return ACCEPT;
+      }
       return refuse("this host does not accept that action");
     }
     switch (next.type) {

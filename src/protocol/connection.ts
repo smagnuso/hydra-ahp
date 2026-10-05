@@ -260,6 +260,15 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
       return;
     }
     core.publish(channel, typed, origin);
+    trackActiveClient(channel, typed);
+  }
+
+  function trackActiveClient(channel: string, next: StateAction): void {
+    if (next.type === "session/activeClientSet" && next.activeClient.clientId === connection.clientId) {
+      connection.activeIn.add(channel);
+    } else if (next.type === "session/activeClientRemoved" && next.clientId === connection.clientId) {
+      connection.activeIn.delete(channel);
+    }
   }
 
   peer.onUnhandledRequest(async (method, raw) => {

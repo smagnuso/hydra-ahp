@@ -61,6 +61,20 @@ describe("read path against a scratch daemon", () => {
     return entry.attachedClients ?? 0;
   }
 
+  it("accepts a client registering as the session's active client and drops it on unsubscribe", async () => {
+    const id = await prompted("ping");
+    await subscribe(id);
+    const sessionUri = `ahp-session:/${id}`;
+    const { clientSeq } = ahp.session.client.dispatch(sessionUri, {
+      type: "session/activeClientSet",
+      activeClient: { clientId: "tester", displayName: "tester", tools: [] },
+    } as never);
+    const echo = await ahp.session.waitFor((e) => e.origin?.clientSeq === clientSeq, 5000);
+    expect(echo.rejectionReason).toBeUndefined();
+    await ahp.session.client.unsubscribe(`ahp-chat:/${id}`);
+    await ahp.session.client.unsubscribe(sessionUri);
+  });
+
   it("shows a session's transcript with tool calls and plans, and detaches on the last unsubscribe", async () => {
     const id = await prompted("script:tools");
     await driver.prompt(id, "ping");
@@ -141,6 +155,8 @@ describe("read path against a scratch daemon", () => {
     const id = await prompted("script:tools");
     await daemon.admin.request("POST", `/v1/sessions/${id}/kill`);
     await until("session cold", async () => (await statusOf(id)) === "cold");
+    // Give the extension's catalog poll time to see the session go cold, or the attach would be live.
+    await sleep(800);
     const { chat } = await subscribe(id);
     expect(chat.turns).toHaveLength(1);
     expect(await statusOf(id)).toBe("cold");

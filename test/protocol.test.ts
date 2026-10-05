@@ -24,6 +24,38 @@ describe.each(["0.9.0", "1.0.0"])("protocol at %s", (version) => {
     await harness.stop();
   });
 
+  it("tracks active clients and removes them when the client unsubscribes or disconnects", async () => {
+    const other = await harness.connect();
+    await session.client.initialize({ clientId: "ca", protocolVersions: offers() });
+    await other.client.initialize({ clientId: "cb", protocolVersions: offers() });
+    await session.client.subscribe(SESSION);
+    await other.client.subscribe(SESSION);
+    const active = (): string[] => (harness.core.store.state(SESSION) as SessionState).activeClients.map((c) => c.clientId);
+
+    const { clientSeq } = session.client.dispatch(
+      SESSION,
+      act({ type: "session/activeClientSet", activeClient: { clientId: "ca", displayName: "a", tools: [] } }),
+    );
+    const echo = await session.waitFor((e) => e.origin?.clientSeq === clientSeq, 2000);
+    expect(echo.rejectionReason).toBeUndefined();
+    expect(active()).toEqual(["ca"]);
+
+    await session.client.unsubscribe(SESSION);
+    await other.waitFor((e) => e.action.type === "session/activeClientRemoved", 2000);
+    expect(active()).toEqual([]);
+
+    await session.client.subscribe(SESSION);
+    session.client.dispatch(
+      SESSION,
+      act({ type: "session/activeClientSet", activeClient: { clientId: "ca", displayName: "a", tools: [] } }),
+    );
+    await sleep(100);
+    expect(active()).toEqual(["ca"]);
+    await session.shutdown();
+    await sleep(200);
+    expect(active()).toEqual([]);
+  });
+
   it("negotiates the version and serves initial snapshots", async () => {
     const result = await session.client.initialize({
       clientId: "c1",
