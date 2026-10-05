@@ -253,7 +253,7 @@ describe.each(["0.9.0", "1.0.0"])("protocol at %s", (version) => {
     });
 
     it("rejects actions on the wrong channel and unknown action types", async () => {
-      await expectRejected(CHAT, { type: "session/titleChanged", title: "x" }, /does not apply/);
+      await expectRejected(CHAT, { type: "session/isReadChanged", isRead: true }, /does not apply/);
       await expectRejected(SESSION, turnStarted(), /does not apply/);
       await expectRejected(CHAT, { type: "chat/doesNotExist" }, /unknown action type/);
     });

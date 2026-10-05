@@ -85,6 +85,10 @@ function reduce(kind: ChannelKind, state: ChannelState, action: StateAction): Ch
     case "session":
       return sessionReducer(state as SessionState, action as Parameters<typeof sessionReducer>[1]);
     case "chat":
+      // A chat rename (see isChatRename) changes the title through Hydra; the chat's own state is unchanged.
+      if (action.type === "session/titleChanged") {
+        return state;
+      }
       return chatReducer(state as ChatState, action as Parameters<typeof chatReducer>[1]);
     case "terminal":
       return terminalReducer(state as TerminalState, action as Parameters<typeof terminalReducer>[1]);

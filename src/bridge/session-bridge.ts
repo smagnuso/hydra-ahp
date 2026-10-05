@@ -842,6 +842,8 @@ export class SessionBridge implements SessionListener {
         return this.setFlag(channel, next.type.endsWith("isReadChanged") ? "isRead" : "isArchived", body);
       case "chat/draftChanged":
         return ACCEPT;
+      case "session/titleChanged":
+        return this.retitle(text(body.title) ?? "");
       case "chat/turnStarted": {
         const decision = await this.startTurn(body);
         if (decision.accept) {

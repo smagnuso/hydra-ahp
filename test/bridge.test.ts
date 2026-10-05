@@ -334,6 +334,20 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     expect(harness.core.hasSubscribers(CHAT)).toBe(false);
   });
 
+  it("renames the Hydra session from either channel, as VS Code sends the rename to the chat", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open(harness, version);
+    for (const [channel, title] of [[CHAT, "From the chat"], [SESSION, "From the session"]] as const) {
+      const { clientSeq } = session.client.dispatch(channel, act({ type: "session/titleChanged", title }));
+      const echo = await session.waitFor((e) => e.origin?.clientSeq === clientSeq);
+      expect(echo.rejectionReason).toBeUndefined();
+    }
+    expect(harness.hydra.writes.filter((write) => write.method === "PATCH").map((write) => write.params)).toEqual([
+      { title: "From the chat" },
+      { title: "From the session" },
+    ]);
+  });
+
   it("applies title changes from session_info_update and from the catalog", async () => {
     harness = await startBridgeHarness();
     const { session } = await open(harness, version);
