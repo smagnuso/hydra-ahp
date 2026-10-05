@@ -170,11 +170,11 @@ describe.each(["0.9.0", "1.0.0"])("write actions at %s", (version) => {
     expect(empty.rejectionReason).toMatch(/empty/);
   });
 
-  it("disposes a session with session/delete", async () => {
+  it("disposes a session with a REST delete", async () => {
     harness = await startBridgeHarness();
     const { session } = await open();
     await session.client.request("disposeSession", { channel: SESSION } as never);
     await sleep(10);
-    expect(harness.hydra.writes).toEqual([{ method: "session/delete", id: "h1" }]);
+    expect(harness.hydra.writes).toEqual([{ method: "DELETE", id: "h1" }]);
   });
 });

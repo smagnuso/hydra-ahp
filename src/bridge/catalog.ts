@@ -234,13 +234,19 @@ export class Catalog {
           continue;
         }
         warm.add(row.sessionId);
-        this.entries.set(row.sessionId, row);
+        this.setEntry(row);
       }
       this.markCold(warm);
       this.reconcile();
     } finally {
       this.warmPolling = false;
     }
+  }
+
+  // A session that has had a real turn stays interactive, so a poll response that was in flight before that turn cannot unlist it.
+  private setEntry(row: HydraSessionEntry): void {
+    const before = this.entries.get(row.sessionId);
+    this.entries.set(row.sessionId, before?.interactive === true && row.interactive !== true ? { ...row, interactive: true } : row);
   }
 
   // Applies Hydra's merge rule; federated rows arrive whole on every response, never as a delta.
@@ -252,7 +258,7 @@ export class Catalog {
       if (row.status === "warm") {
         warm.add(row.sessionId);
       }
-      this.entries.set(row.sessionId, row);
+      this.setEntry(row);
     }
     for (const id of page.removed ?? []) {
       this.drop(id);

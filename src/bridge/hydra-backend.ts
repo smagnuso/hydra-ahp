@@ -9,7 +9,7 @@ import type { ActionDecision, ActionRequest, Backend, ClientContext } from "../p
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { FileService } from "../files/service.js";
-import type { HydraRest, HydraSessionEntry } from "../hydra/rest.js";
+import { HydraHttpError, type HydraRest, type HydraSessionEntry } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
 import { AHP_CHAT_KEY, AHP_URI_KEY, type Catalog } from "./catalog.js";
@@ -27,7 +27,7 @@ const SESSION_EXISTS = -32003;
 
 const FAILED_CHANNEL_LINGER_MS = 30_000;
 const MAX_IDLE_BRIDGES = 16;
-const INITIAL_WAIT_MS = 10_000;
+const INITIAL_WAIT_MS = 10 * 60_000;
 
 const action = (value: Record<string, unknown>) => value as never;
 
@@ -245,6 +245,8 @@ export class HydraBackend implements Backend {
         return this.createChat(body);
       case "disposeChat":
         return this.disposeChat(body);
+      case "resolveSessionConfig":
+        return { schema: { type: "object", properties: {} }, values: {} };
       case "fetchTurns":
         return this.fetchTurns(body);
       default:
@@ -345,11 +347,12 @@ export class HydraBackend implements Backend {
     }
   }
 
+  // REST rather than ACP session/delete: the ACP verb answers success without removing the session.
   private async deleteHydraSession(hydraId: string): Promise<void> {
     try {
-      await this.sessions.delete(hydraId);
+      await this.rest.deleteSession(hydraId);
     } catch (err) {
-      if (err instanceof RpcError && err.code === SESSION_NOT_FOUND) {
+      if (err instanceof HydraHttpError && err.status === 404) {
         throw new RpcError(SESSION_NOT_FOUND, "Session not found");
       }
       throw new RpcError(ErrorCodes.InternalError, `Hydra could not delete the session: ${message(err)}`);
@@ -464,17 +467,19 @@ export class HydraBackend implements Backend {
     }
   }
 
-  // The first message of a new chat becomes its first turn once a client has the chat open.
+  // The first message of a new chat becomes its first turn, with or without a client watching; the attachment is dropped once it ends unwatched.
   private async runInitial(chat: string, first: Record<string, unknown>): Promise<void> {
-    for (let waited = 0; waited < INITIAL_WAIT_MS && !this.core.hasSubscribers(chat); waited += 50) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-    if (!this.core.hasSubscribers(chat)) {
-      log.warn(`initial message for ${chat} dropped: no client opened the chat`);
-      return;
-    }
-    await this.bridgeFor(chat)?.startInitial(randomUUID(), first).catch((err) => {
+    const bridge = this.bridgeFor(chat);
+    try {
+      await bridge?.startInitial(randomUUID(), first);
+      for (let waited = 0; bridge?.running && waited < INITIAL_WAIT_MS; waited += 100) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    } catch (err) {
       log.warn(`initial message for ${chat} failed`, message(err));
-    });
+    }
+    if (bridge && !this.core.hasSubscribers(chat)) {
+      await bridge.detach().catch(() => undefined);
+    }
   }
 }

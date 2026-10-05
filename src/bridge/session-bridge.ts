@@ -151,6 +151,8 @@ export class SessionBridge implements SessionListener {
   private writes: Promise<unknown> = Promise.resolve();
   // Work an accepted write still owes Hydra; later writes wait for it.
   private followUp: Promise<void> | undefined;
+  // Set while the host itself starts a turn, which needs no subscribed client.
+  private headless = false;
   commands: unknown;
 
   constructor(private readonly deps: BridgeDeps) {}
@@ -337,7 +339,8 @@ export class SessionBridge implements SessionListener {
     }
 
     const summary = this.deps.catalog.summaryFor(this.deps.sessionUri);
-    const base = held ?? emptyChat(chatUri, own?.title || summary?.title || "", own?.updatedAt ?? summary?.modifiedAt ?? new Date(0).toISOString(), withFlagBits(STATUS_IDLE, this.deps.catalog.flagsFor(this.deps.hydraId)));
+    const chatTitle = summary?.chats?.find((entry) => entry.resource === chatUri)?.title;
+    const base = held ?? emptyChat(chatUri, own?.title || chatTitle || "", own?.updatedAt ?? summary?.modifiedAt ?? new Date(0).toISOString(), withFlagBits(STATUS_IDLE, this.deps.catalog.flagsFor(this.deps.hydraId)));
     const plan = this.reconcilePlan(base, produced, cursor);
     // Replaying turns clears the read bit in the official reducers; the stored mark survives a replay.
     if (this.deps.catalog.flagsFor(this.deps.hydraId).isRead) {
@@ -625,10 +628,21 @@ export class SessionBridge implements SessionListener {
     return turnId;
   }
 
+  get running(): boolean {
+    return this.chatState()?.activeTurn !== undefined;
+  }
+
   // The first turn of a chat created with an initial message: announced to the chat's subscribers, then sent to Hydra.
   async startInitial(turnId: string, message: Json): Promise<void> {
     const startedAt = new Date().toISOString();
-    const decision = await this.handleAction(this.deps.chatUri, { type: "chat/turnStarted", turnId, startedAt, message } as never);
+    await this.ensureLive();
+    this.headless = true;
+    let decision: ActionDecision;
+    try {
+      decision = await this.handleAction(this.deps.chatUri, { type: "chat/turnStarted", turnId, startedAt, message } as never);
+    } finally {
+      this.headless = false;
+    }
     if (!decision.accept) {
       throw new Error(decision.reason);
     }
@@ -700,7 +714,7 @@ export class SessionBridge implements SessionListener {
 
   // Writes need a live attachment: a cold session is held through a read-only viewer, which Hydra refuses writes on.
   private async writable(): Promise<string | undefined> {
-    if (!this.deps.core.hasSubscribers(this.deps.chatUri)) {
+    if (!this.headless && !this.deps.core.hasSubscribers(this.deps.chatUri)) {
       return "subscribe to the chat before writing to it";
     }
     try {

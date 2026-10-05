@@ -80,6 +80,7 @@ describe("several chats in one session against a scratch daemon", () => {
 
     const fresh = await chatState(second);
     expect(fresh.turns).toHaveLength(0);
+    expect(fresh.title).toBe("Untitled chat");
     await say(second, "second-1", "hello second");
     const after = await chatState(second);
     expect(text(after, 0)).toBe("hello second");
@@ -132,8 +133,33 @@ describe("several chats in one session against a scratch daemon", () => {
     expect(text(done, 0)).toBe("opening line");
   });
 
+  it("runs the initial message of a chat nobody opened, then lets go of it", async () => {
+    const { uri } = await prompted();
+    const chat = `ahp-chat:/${randomUUID()}`;
+    await ahp.session.client.request("createChat", {
+      channel: uri,
+      chat,
+      initialMessage: { text: "headless hello", origin: { kind: "user" } },
+    } as never);
+    const row = await until("headless turn recorded", async () => {
+      const rows = (await daemon.admin.listSessions({ includeNonInteractive: true })).sessions;
+      const found = rows.find((r) => r.title === "headless hello");
+      return found && !found.busy ? found : undefined;
+    }, 20000);
+    await until("attachment released", async () => ((await daemon.admin.getSession(row.sessionId)).attachedClients === 0 ? true : undefined));
+  });
+
+  it("answers resolveSessionConfig with an empty schema", async () => {
+    const result = (await ahp.session.client.request("resolveSessionConfig", { channel: ROOT, provider: "fake" } as never)) as unknown as {
+      schema: { type: string; properties: Record<string, unknown> };
+      values: Record<string, unknown>;
+    };
+    expect(result.schema).toEqual({ type: "object", properties: {} });
+    expect(result.values).toEqual({});
+  });
+
   it("removes one chat, promotes the next default, and removes the session with its last chat", async () => {
-    const { uri, chat } = await prompted();
+    const { id, uri, chat } = await prompted();
     await session(uri);
     const second = `ahp-chat:/${randomUUID()}`;
     await ahp.session.client.request("createChat", { channel: uri, chat: second } as never);
@@ -144,6 +170,7 @@ describe("several chats in one session against a scratch daemon", () => {
 
     await ahp.session.client.request("disposeChat", { channel: chat } as never);
     await ahp.session.waitFor((e) => e.channel === uri && e.action.type === "session/chatRemoved", 8000);
+    await until("first chat's Hydra session deleted", async () => (await daemon.admin.getSession(id).then(() => undefined, () => true)));
     await until("second is the default", async () => {
       const row = (await items()).find((item) => item.resource === uri);
       return row?.chats?.length === 1 && row.defaultChat === second ? true : undefined;
@@ -164,7 +191,7 @@ describe("several chats in one session against a scratch daemon", () => {
     });
     await ahp.session.client.request("disposeSession", { channel: uri } as never);
     await until("session gone", async () => ((await items()).some((item) => item.resource === uri) ? undefined : true));
-    expect(id).toBeDefined();
+    await until("hydra session deleted", async () => (await daemon.admin.getSession(id).then(() => undefined, () => true)));
   });
 
   it("refuses a duplicate chat, an unknown session, a side chat and a foreign source", async () => {

@@ -124,6 +124,9 @@ export class FakeHydra {
     patchSession: async (id: string, body: unknown) => {
       this.writes.push({ method: "PATCH", id, params: body });
     },
+    deleteSession: async (id: string) => {
+      this.writes.push({ method: "DELETE", id });
+    },
   } as unknown as HydraRest;
 
   extState = { get: async () => null } as unknown as ExtensionState;

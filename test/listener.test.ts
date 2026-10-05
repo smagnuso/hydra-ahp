@@ -86,7 +86,7 @@ describe("listener auth", () => {
 });
 
 describe("listener throttling", () => {
-  it("backs off an address after repeated bad tokens", async () => {
+  it("backs off an address after repeated bad tokens, but still lets a valid token in", async () => {
     const harness = await startHarness();
     const listener = new AhpListener({
       core: harness.core,
@@ -101,9 +101,31 @@ describe("listener throttling", () => {
     }
     await expect(openSocket(url("bad"))).rejects.toThrow("status 429");
     const { token } = harness.mint();
-    await expect(openSocket(url(token))).rejects.toThrow("status 429");
+    const ok = await openSocket(url(token));
+    ok.close();
+    await expect(openSocket(url("bad"))).rejects.toThrow("status 429");
     await listener.close();
     await harness.stop();
     await sleep(0);
+  });
+});
+
+describe("token revocation from another process", () => {
+  it("closes a live connection within the watch interval", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ahp-revoke-"));
+    const path = join(dir, "tokens.json");
+    const tokens = new TokenRegistry({ path });
+    const core = new ProtocolCore({ backend: new FakeBackend() });
+    await core.start();
+    const listener = new AhpListener({ core, tokens, watchTokensMs: 50 });
+    const port = await listener.listen();
+    const { token, info } = tokens.mint("live");
+    const session = await openSession(`ws://127.0.0.1:${port}/?tkn=${token}`);
+    await session.client.initialize({ clientId: "live", protocolVersions: ["0.9.0"] });
+    new TokenRegistry({ path }).revoke(info.id);
+    await sleep(400);
+    expect(session.closed).toBeDefined();
+    await expect(session.client.ping()).rejects.toBeDefined();
+    await listener.close();
   });
 });

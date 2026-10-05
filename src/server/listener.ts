@@ -22,6 +22,7 @@ export interface ListenerOptions {
   allowedOrigins?: readonly string[];
   maxBadAttempts?: number;
   badAttemptWindowMs?: number;
+  watchTokensMs?: number;
   now?: () => number;
 }
 
@@ -62,6 +63,7 @@ export class AhpListener {
   private readonly host: string;
   private readonly now: () => number;
   private readonly unsubscribeRevoke: () => void;
+  private readonly watchTimer: NodeJS.Timeout;
 
   constructor(private readonly options: ListenerOptions) {
     this.host = options.host ?? "127.0.0.1";
@@ -79,6 +81,15 @@ export class AhpListener {
     this.unsubscribeRevoke = options.tokens.onRevoke((id) => {
       this.closeToken(id);
     });
+    // A token revoked from the command line is another process's write; notice it without waiting for the next connection.
+    this.watchTimer = setInterval(() => {
+      try {
+        options.tokens.refresh();
+      } catch (err) {
+        log.warn("token refresh failed", err);
+      }
+    }, options.watchTokensMs ?? 2000);
+    this.watchTimer.unref();
   }
 
   async listen(): Promise<number> {
@@ -93,6 +104,7 @@ export class AhpListener {
   }
 
   async close(): Promise<void> {
+    clearInterval(this.watchTimer);
     this.unsubscribeRevoke();
     for (const connections of this.live.values()) {
       for (const connection of connections) {
@@ -107,18 +119,19 @@ export class AhpListener {
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const address = req.socket.remoteAddress ?? "unknown";
-    if (this.throttled(address)) {
-      reply(socket, "429 Too Many Requests");
-      return;
-    }
     if (!originAllowed(req.headers.origin, this.options.allowedOrigins ?? [])) {
       log.warn(`rejected upgrade from origin ${req.headers.origin}`);
       reply(socket, "403 Forbidden");
       return;
     }
+    // Every client on loopback shares one address, so a valid token is never held back by someone else's bad ones.
     const token = extractToken(req);
     const info = token ? this.options.tokens.validate(token) : undefined;
     if (!info) {
+      if (this.throttled(address)) {
+        reply(socket, "429 Too Many Requests");
+        return;
+      }
       this.recordFailure(address);
       reply(socket, "401 Unauthorized");
       return;
