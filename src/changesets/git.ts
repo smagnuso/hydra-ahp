@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 const MAX_BUFFER = 64 * 1024 * 1024;
@@ -36,14 +36,27 @@ function fields(output: Buffer): string[] {
   return output.toString("utf8").split("\0").filter((entry) => entry !== "");
 }
 
-// Walks up from cwd rather than taking --show-toplevel, which resolves symlinks and would name files by a path the session does not use.
+// Prefers the root reached by walking up from cwd, so files keep the path the session uses rather than the one
+// --show-toplevel resolves symlinks to; a cwd that is itself a symlink into the repository gets git's own root.
 export async function repoRoot(cwd: string): Promise<string | undefined> {
   try {
-    const prefix = (await git(cwd, ["rev-parse", "--show-prefix"])).toString("utf8").trim();
-    const depth = prefix.split("/").filter((segment) => segment !== "").length;
-    return resolve(cwd, ...Array<string>(depth).fill(".."));
+    const [top, prefix] = (await git(cwd, ["rev-parse", "--show-toplevel", "--show-prefix"])).toString("utf8").split("\n");
+    if (!top) {
+      return undefined;
+    }
+    const depth = (prefix ?? "").split("/").filter((segment) => segment !== "").length;
+    const walked = resolve(cwd, ...Array<string>(depth).fill(".."));
+    return (await sameDirectory(walked, top)) ? walked : top;
   } catch {
     return undefined;
+  }
+}
+
+async function sameDirectory(a: string, b: string): Promise<boolean> {
+  try {
+    return (await realpath(a)) === (await realpath(b));
+  } catch {
+    return false;
   }
 }
 
