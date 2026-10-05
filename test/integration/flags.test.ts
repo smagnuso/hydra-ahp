@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ChatView } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_DIR } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 const IS_READ = 32;
@@ -40,7 +40,7 @@ describe("read and archive marks against a scratch daemon", () => {
   }
 
   async function opened(): Promise<{ id: string; view: ChatView }> {
-    const id = await driver.newSession("/tmp");
+    const id = await driver.newSession(WORK_DIR);
     await driver.prompt(id, "ping");
     await until("session listed", async () => (await rowStatus(id)) !== undefined);
     return { id, view: await ChatView.open(ahp, id) };

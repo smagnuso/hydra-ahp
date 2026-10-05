@@ -128,7 +128,8 @@ describe("read path against a scratch daemon", () => {
       await ahp.session.client.unsubscribe(uri);
       return status.status ?? 0;
     };
-    expect((await statusNow()) & 8).toBe(0);
+    // Activity comes from the catalog's last poll, which can predate the end of the first prompt by a poll interval.
+    await until("session reads as idle after its first prompt", async () => (((await statusNow()) & 8) === 0 ? true : undefined));
     const turn = driver.prompt(id, "script:slow");
     await until("session reads as running", async () => (((await statusNow()) & 8) === 8 ? true : undefined));
     await turn;
@@ -203,7 +204,18 @@ describe("read path against a scratch daemon", () => {
       await other.shutdown();
     }
     await turn;
-    await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete");
+    // The agent is done when its prompt resolves, but the extension can still be mapping the flood behind it.
+    await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete", 20_000).catch(async (err: Error) => {
+      // Fails on CI runners only: tell a turn end the extension never saw from one the client never received.
+      const probe = await openOther();
+      const server = ((await probe.client.subscribe(chat)).result.snapshot as Snapshot).state as ChatState;
+      await probe.shutdown();
+      const seen = ahp.session.events.filter((e) => e.channel === chat).slice(-5).map((e) => e.action.type);
+      throw new Error(
+        `${err.message}; server activeTurn=${server.activeTurn?.id ?? "none"} turns=${server.turns.length} ` +
+          `client last=${JSON.stringify(seen)}\n${daemon.logLines(id, 60)}`,
+      );
+    });
     await sleep(200);
     for (const envelope of ahp.session.events) {
       oracle.applyEnvelope(envelope);

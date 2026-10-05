@@ -1,7 +1,10 @@
+import { accessSync, chmodSync, constants, existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { IPty } from "node-pty";
 import type { TerminalClaim, TerminalInfo, TerminalState } from "@microsoft/agent-host-protocol";
-import { uriToCwd } from "../bridge/ids.js";
+import { cwdToUri, uriToCwd } from "../bridge/ids.js";
 import type { ActionDecision, ClientContext } from "../protocol/backend.js";
 import { ROOT_URI, isTerminalUri } from "../protocol/channels.js";
 import type { ProtocolCore } from "../protocol/core.js";
@@ -31,12 +34,42 @@ interface Running {
 
 const action = (value: Record<string, unknown>) => value as never;
 
+function defaultShell(): string {
+  if (process.platform === "win32") {
+    return process.env.ComSpec ?? "cmd.exe";
+  }
+  return process.env.SHELL ?? "/bin/sh";
+}
+
+// node-pty 1.1.0 ships its macOS spawn-helper without the execute bit, so every spawn fails with "posix_spawnp failed".
+function makeSpawnHelperExecutable(): void {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  try {
+    const root = dirname(createRequire(import.meta.url).resolve("node-pty/package.json"));
+    const helper = join(root, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper");
+    if (!existsSync(helper)) {
+      return;
+    }
+    try {
+      accessSync(helper, constants.X_OK);
+    } catch {
+      chmodSync(helper, 0o755);
+    }
+  } catch (err) {
+    log.warn("could not make node-pty's spawn-helper executable", err instanceof Error ? err.message : err);
+  }
+}
+
 // Shells on this machine for clients holding a full token: the Agents window opens one per session in its working directory.
 export class TerminalService {
   private core!: ProtocolCore;
   private spawn: Spawn | undefined;
   private readonly terminals = new Map<string, Running>();
   private readonly orphanTimers = new Map<string, NodeJS.Timeout>();
+  // Stand-ins for terminals this process never had, such as ones from before a restart.
+  private readonly gone = new Set<string>();
 
   constructor(private readonly options: TerminalServiceOptions = {}) {}
 
@@ -48,6 +81,7 @@ export class TerminalService {
     }
     try {
       const pty = await import("node-pty");
+      makeSpawnHelperExecutable();
       this.spawn = (shell, args, options) => pty.spawn(shell, args, options);
     } catch (err) {
       log.info("terminals are unavailable: node-pty did not load", err instanceof Error ? err.message : err);
@@ -144,6 +178,7 @@ export class TerminalService {
   }
 
   private create(channel: string, body: Record<string, unknown>, client: ClientContext): void {
+    this.detachGone(channel);
     if (this.terminals.has(channel) || this.core.store.has(channel)) {
       throw new RpcError(ErrorCodes.InvalidParams, "terminal already exists");
     }
@@ -153,7 +188,7 @@ export class TerminalService {
     const rows = positive(body.rows) ?? 24;
     const title = typeof body.name === "string" && body.name !== "" ? body.name : "Terminal";
     const claim = isClaim(body.claim) ? body.claim : ({ kind: "client", clientId: client.clientId } as TerminalClaim);
-    const shell = this.options.shell ?? process.env.SHELL ?? "/bin/sh";
+    const shell = this.options.shell ?? defaultShell();
     let pty: IPty;
     try {
       pty = (this.spawn as Spawn)(shell, [], { name: "xterm-256color", cols, rows, cwd, env: process.env });
@@ -162,7 +197,7 @@ export class TerminalService {
     }
     const state: TerminalState = {
       title,
-      cwd: cwdUri ?? `file://${cwd}`,
+      cwd: cwdUri ?? cwdToUri(cwd),
       cols,
       rows,
       content: [],
@@ -189,6 +224,37 @@ export class TerminalService {
     });
     this.publishList();
     log.info(`started ${shell} in ${cwd} for ${client.clientId}`);
+  }
+
+  // A client still holding a terminal from before a restart gets a stand-in that exits at once, so it closes the tab
+  // instead of typing into nothing.
+  attachGone(channel: string): void {
+    if (!isTerminalUri(channel) || this.terminals.has(channel) || this.core.store.has(channel)) {
+      return;
+    }
+    this.gone.add(channel);
+    this.core.createChannel(channel, {
+      title: "Terminal",
+      cwd: cwdToUri(homedir()),
+      cols: 80,
+      rows: 24,
+      content: [],
+      lifecycle: { status: "running" },
+      claim: { kind: "client", clientId: "" },
+      supportsCommandDetection: false,
+      isPty: true,
+    } as TerminalState);
+    setImmediate(() => {
+      if (this.gone.has(channel) && this.core.store.has(channel)) {
+        this.core.publish(channel, action({ type: "terminal/exited" }));
+      }
+    });
+  }
+
+  detachGone(channel: string): void {
+    if (this.gone.delete(channel)) {
+      this.core.removeChannel(channel);
+    }
   }
 
   private dispose(channel: string): void {

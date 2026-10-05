@@ -22,7 +22,10 @@ describe("TokenRegistry", () => {
     const raw = readFileSync(path, "utf8");
     expect(raw).not.toContain(token);
     expect(raw).toContain(createHash("sha256").update(token).digest("hex"));
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX permission bits.
+    if (process.platform !== "win32") {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("defaults to the full level and rejects unknown levels", () => {

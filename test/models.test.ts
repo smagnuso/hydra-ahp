@@ -23,7 +23,10 @@ describe("model store", () => {
     const path = scratch();
     const store = new ModelStore(path);
     expect(store.set("claude-acp", [{ id: "opus", name: "Opus" }, { id: "sonnet", name: "Sonnet" }])).toBe(true);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX permission bits.
+    if (process.platform !== "win32") {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    }
     const again = new ModelStore(path);
     expect(again.get("claude-acp").map((m) => m.id)).toEqual(["opus", "sonnet"]);
     expect(again.get("other")).toEqual([]);

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@microsoft/agent-host-protocol";
 import { openSession } from "../support/harness.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, sleep, until, WORK_DIR, WORK_URI } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 async function list(ahp: AhpConnection, params: Record<string, unknown> = {}) {
@@ -49,14 +49,16 @@ describe("one scratch daemon", () => {
     );
     expect(await driver.prompt(id, "ping")).toBe("pong");
     await added;
-    const summary = (await list(ahp)).items.find((s) => s.resource === sessionOf(id));
-    expect(summary?.provider).toBe("fake");
-    expect(summary?.status).toBe(1);
+    // The status comes from the catalog's last poll, which can predate the end of the prompt by a poll interval.
+    const summary = await until("listed as idle", async () =>
+      (await list(ahp)).items.find((s) => s.resource === sessionOf(id) && s.status === 1),
+    );
+    expect(summary.provider).toBe("fake");
   });
 
   it("does not list sessions that were never prompted, even though the poll sees them", async () => {
     const result = await driver.client.request<{ sessionId: string }>("session/new", {
-      cwd: "/tmp",
+      cwd: WORK_DIR,
       mcpServers: [],
       _meta: { "hydra-acp": { interactive: false } },
     });
@@ -71,7 +73,7 @@ describe("one scratch daemon", () => {
     await driver.prompt(id, "ping");
     await until("session listed", async () => (await list(ahp)).items.some((s) => s.resource.endsWith(id)));
     const listed = (await list(ahp)).items.find((s) => s.resource.endsWith(id));
-    expect(listed?.workingDirectories).toEqual(["file:///tmp"]);
+    expect(listed?.workingDirectories).toEqual([WORK_URI]);
   });
 
   it("pages listSessions newest first without repeats", async () => {
@@ -80,6 +82,15 @@ describe("one scratch daemon", () => {
       await driver.prompt(id, "ping");
     }
     await until("all listed", async () => (await list(ahp)).items.length >= 5);
+    // New sessions keep arriving and reordering as titles land, so page only once two polls agree.
+    let last = "";
+    await until("the catalog settles", async () => {
+      await sleep(400);
+      const now = JSON.stringify((await list(ahp)).items.map((s) => [s.resource, s.modifiedAt]));
+      const settled = now === last;
+      last = now;
+      return settled;
+    });
     const seen: string[] = [];
     let cursor: string | undefined;
     do {
@@ -107,7 +118,7 @@ describe("one scratch daemon", () => {
       await ahp.session.client.request("createSession", {
         channel,
         provider: "fake",
-        workingDirectories: ["file:///tmp"],
+        workingDirectories: [WORK_URI],
       } as never);
       const sub = await ahp.session.client.subscribe(channel);
       const state = sub.result.snapshot?.state as { lifecycle: string };
@@ -116,7 +127,7 @@ describe("one scratch daemon", () => {
       }
       const created = await until("hydra session", async () => {
         const page = await daemon.admin.listSessions({ includeNonInteractive: true });
-        return page.sessions.find((s) => !before.has(s.sessionId) && s.cwd === "/tmp" && s.agentId === "fake");
+        return page.sessions.find((s) => !before.has(s.sessionId) && s.cwd === WORK_DIR && s.agentId === "fake");
       });
       expect(created.interactive).not.toBe(true);
       const listed = (await list(ahp)).items.find((s) => s.resource === channel);

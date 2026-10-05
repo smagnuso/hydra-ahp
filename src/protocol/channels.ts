@@ -70,6 +70,8 @@ interface Channel {
   kind: ChannelKind;
   state: ChannelState;
   createdSeq: number;
+  // The session that last changed this chat's summary; a client not subscribed to it never saw the change.
+  summaryFrom?: string;
 }
 
 export type ReplayResult =
@@ -85,6 +87,10 @@ function reduce(kind: ChannelKind, state: ChannelState, action: StateAction): Ch
     case "session":
       return sessionReducer(state as SessionState, action as Parameters<typeof sessionReducer>[1]);
     case "chat":
+      // A chat rename (see isChatRename) changes the title through Hydra; the chat's own state is unchanged.
+      if (action.type === "session/titleChanged") {
+        return state;
+      }
       return chatReducer(state as ChatState, action as Parameters<typeof chatReducer>[1]);
     case "terminal":
       return terminalReducer(state as TerminalState, action as Parameters<typeof terminalReducer>[1]);
@@ -154,6 +160,7 @@ export class ChannelStore {
       throw new Error(`unknown channel: ${uri}`);
     }
     channel.state = reduce(channel.kind, channel.state, action);
+    this.mirrorChatSummary(uri, action);
     this.seq += 1;
     const envelope: ActionEnvelope = { channel: uri, action, serverSeq: this.seq, origin };
     this.ring.push(envelope);
@@ -166,16 +173,40 @@ export class ChannelStore {
     return envelope;
   }
 
+  // A chat's state repeats its summary's fields, so a summary change announced on the session reaches the chat's snapshot too.
+  private mirrorChatSummary(session: string, action: StateAction): void {
+    if (action.type !== "session/chatUpdated") {
+      return;
+    }
+    const chat = this.channels.get(action.chat);
+    if (chat?.kind !== "chat") {
+      return;
+    }
+    const { resource: _resource, ...changes } = action.changes as { resource?: string } & Record<string, unknown>;
+    const held = chat.state as unknown as Record<string, unknown>;
+    if (Object.entries(changes).every(([key, value]) => held[key] === value)) {
+      return;
+    }
+    chat.state = { ...(chat.state as ChatState), ...changes };
+    // No chat-channel action records this, so a client that last saw the chat before it must reconnect to a snapshot.
+    chat.createdSeq = this.seq + 1;
+    chat.summaryFrom = session;
+  }
+
   // Replays only when the ring still covers the gap and no channel was recreated since.
   replay(lastSeen: number, subscriptions: readonly string[]): ReplayResult {
     const missing = subscriptions.filter((uri) => !this.channels.has(uri));
     const live = subscriptions.filter((uri) => this.channels.has(uri));
     const covered = lastSeen >= this.floor && lastSeen <= this.seq;
+    const wanted = new Set(live);
     const recreated = live.some((uri) => (this.channels.get(uri)?.createdSeq ?? 0) > lastSeen);
-    if (!covered || recreated) {
+    const unseenSummary = live.some((uri) => {
+      const from = this.channels.get(uri)?.summaryFrom;
+      return from !== undefined && !wanted.has(from);
+    });
+    if (!covered || recreated || unseenSummary) {
       return { type: "snapshot" };
     }
-    const wanted = new Set(live);
     const actions = this.ring.filter(
       (envelope) => envelope.serverSeq > lastSeen && wanted.has(envelope.channel),
     );

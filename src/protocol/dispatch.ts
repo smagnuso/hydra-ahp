@@ -59,6 +59,9 @@ export function validateAction(
     return reject(`action ${action.type} is not client-dispatchable`);
   }
   const prefix = action.type.split("/")[0] ?? "";
+  if (isChatRename(channel, action)) {
+    return OK;
+  }
   if (PREFIX_KIND[prefix] !== channelKind(channel)) {
     return reject(`action ${action.type} does not apply to ${channel}`);
   }
@@ -66,6 +69,11 @@ export function validateAction(
     return validateChatAction(state as ChatState, action);
   }
   return OK;
+}
+
+// VS Code renames a chat by dispatching session/titleChanged to the chat channel rather than the session channel.
+export function isChatRename(channel: string, action: StateAction): boolean {
+  return action.type === "session/titleChanged" && channelKind(channel) === "chat";
 }
 
 function validateChatAction(state: ChatState, action: StateAction): Validation {

@@ -139,6 +139,9 @@ export class SessionBridge implements SessionListener {
   private mode: "live" | "viewer" | undefined;
   private unlisten: (() => void) | undefined;
   private buffering: Pending[] | undefined;
+  // Hydra's events while our own steer is in flight: the agent's answer can come before Hydra's reply, so it waits for the split.
+  // Held until the reply, which Hydra sends at once; a lost connection fails the request and releases them too.
+  private steerHold: { events: Pending[]; released: Promise<void>; release: () => void } | undefined;
   private highWater: number | undefined;
   private sawClosed = false;
   private chain: Promise<unknown> = Promise.resolve();
@@ -148,6 +151,8 @@ export class SessionBridge implements SessionListener {
   private meta: Json = {};
   private model: string | undefined;
   private readonly sends: OwnEntry[] = [];
+  // A detach asked for while our own prompts were in flight: Hydra would refuse them once we detached.
+  private detachWhenSettled = false;
   private readonly own = new Map<string, OwnEntry>();
   private readonly queuedEntries = new Map<string, OwnEntry>();
   private readonly parked = new Map<string, Parked>();
@@ -209,6 +214,7 @@ export class SessionBridge implements SessionListener {
   }
 
   dispose(): Promise<void> {
+    this.releaseSteerHold();
     this.disposed = true;
     return this.serial(async () => {
       await this.release();
@@ -243,6 +249,10 @@ export class SessionBridge implements SessionListener {
   private deliver(event: Pending): void {
     if (this.buffering) {
       this.buffering.push(event);
+      return;
+    }
+    if (this.steerHold) {
+      this.steerHold.events.push(event);
       return;
     }
     this.handle(event, (actions) => this.publish(actions));
@@ -667,14 +677,12 @@ export class SessionBridge implements SessionListener {
     if (!title || !state) {
       return;
     }
-    if (!catalog.isDefaultMember(hydraId)) {
-      const held = state.chats.find((entry) => entry.resource === chatUri);
-      if (held && held.title !== title) {
-        core.publish(sessionUri, action({ type: "session/chatUpdated", chat: chatUri, changes: { title } }));
-      }
-      return;
+    // VS Code titles a chat's tab from its chat state, which only session/chatUpdated naming the chat changes.
+    const held = state.chats.find((entry) => entry.resource === chatUri);
+    if (held && held.title !== title) {
+      core.publish(sessionUri, action({ type: "session/chatUpdated", chat: chatUri, changes: { title } }));
     }
-    if (state.title !== title) {
+    if (catalog.isDefaultMember(hydraId) && state.title !== title) {
       core.publish(sessionUri, action({ type: "session/titleChanged", title }));
     }
   }
@@ -736,6 +744,11 @@ export class SessionBridge implements SessionListener {
 
   private async doDetach(): Promise<void> {
     if (!this.attached || this.deps.core.hasSubscribers(this.deps.chatUri)) {
+      return;
+    }
+    // A prompt sent just before the client left must still run, and Hydra only runs prompts from attached clients.
+    if (this.sends.length > 0) {
+      this.detachWhenSettled = true;
       return;
     }
     await this.release();
@@ -811,6 +824,11 @@ export class SessionBridge implements SessionListener {
   }
 
   private async decide(channel: string, next: StateAction): Promise<ActionDecision> {
+    // A held turn end or start would make this decision on a stale turn: a cancel could reach the turn after it.
+    // Releasing one hold can start another steer, and so another hold, before this resumes.
+    while (this.steerHold) {
+      await this.steerHold.released;
+    }
     const body = next as unknown as Json;
     if (channel === this.deps.sessionUri) {
       if (next.type === "session/titleChanged") {
@@ -833,6 +851,8 @@ export class SessionBridge implements SessionListener {
         return this.setFlag(channel, next.type.endsWith("isReadChanged") ? "isRead" : "isArchived", body);
       case "chat/draftChanged":
         return ACCEPT;
+      case "session/titleChanged":
+        return this.retitle(text(body.title) ?? "");
       case "chat/turnStarted": {
         const decision = await this.startTurn(body);
         if (decision.accept) {
@@ -1133,6 +1153,7 @@ export class SessionBridge implements SessionListener {
     steer.triedAt = Date.now();
     const entry = ownEntry({ kind: "steer", pendingId: steer.id, message: steer.message, prompt: steer.prompt });
     this.sends.push(entry);
+    this.holdForSteer();
     this.deps.sessions.steer(this.deps.hydraId, steer.prompt).then(
       (result) => this.steered(steer, entry, result),
       (err) => {
@@ -1144,7 +1165,36 @@ export class SessionBridge implements SessionListener {
 
   // Per PROTOCOL.md: startedNewTurn without detached is an entry Hydra queued for us, whose start consumes the chip;
   // detached is already covered by _hydra_turn_started; injected is never echoed to the steering client.
+  private holdForSteer(): void {
+    this.releaseSteerHold();
+    let release = (): void => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.steerHold = { events: [], released, release };
+  }
+
+  private releaseSteerHold(): void {
+    const hold = this.steerHold;
+    if (!hold) {
+      return;
+    }
+    this.steerHold = undefined;
+    for (const event of hold.events) {
+      this.deliver(event);
+    }
+    hold.release();
+  }
+
   private steered(steer: HeldSteer, entry: OwnEntry, result: SteeringResult): void {
+    try {
+      this.settleSteer(steer, entry, result);
+    } finally {
+      this.releaseSteerHold();
+    }
+  }
+
+  private settleSteer(steer: HeldSteer, entry: OwnEntry, result: SteeringResult): void {
     steer.inFlight = false;
     if (result.outcome === "promptRequired") {
       this.dropSend(entry);
@@ -1158,7 +1208,7 @@ export class SessionBridge implements SessionListener {
     }
     this.dropSend(entry);
     // Hydra does not echo an injected steer to the client that sent it, so the turn carrying it is announced here,
-    // before the agent's answer to it can arrive and land in the turn it steered.
+    // before the held answer to it is let through.
     if (result.outcome === "injected") {
       this.publish(this.mapper.steer(`steer-${steer.id}`, Date.now(), steer.message, steer.id));
     }
@@ -1170,10 +1220,15 @@ export class SessionBridge implements SessionListener {
     });
   }
 
+  // Every way a send ends comes through here, so a detach deferred for it is retried here.
   private dropSend(entry: OwnEntry): void {
     const index = this.sends.indexOf(entry);
     if (index >= 0) {
       this.sends.splice(index, 1);
+    }
+    if (this.detachWhenSettled && this.sends.length === 0) {
+      this.detachWhenSettled = false;
+      void this.detach().catch((err) => log.debug(`detach ${this.deps.hydraId} after its prompts failed`, message(err)));
     }
   }
 

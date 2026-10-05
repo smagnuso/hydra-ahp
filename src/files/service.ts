@@ -80,11 +80,21 @@ function uriParam(params: Json, key: string): string {
 }
 
 function toPath(uri: string): string {
-  const path = uriToCwd(uri);
+  const path = onThisHost(uri) ? uriToCwd(uri) : undefined;
   if (path === undefined || path.includes("\0")) {
     throw new RpcError(ErrorCodes.InvalidParams, "uri must be an absolute file: URI on this host");
   }
   return path;
+}
+
+// On Windows a file URI with a host is a UNC path to another machine's share.
+function onThisHost(uri: string): boolean {
+  try {
+    const host = new URL(uri).hostname;
+    return host === "" || host === "localhost";
+  } catch {
+    return false;
+  }
 }
 
 function mimeFor(path: string): string | undefined {

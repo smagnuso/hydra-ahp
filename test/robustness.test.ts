@@ -97,6 +97,138 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
     expect(state.turns.map((turn) => turn.message.origin.kind)).toEqual(["agent", "agent"]);
   });
 
+  it("puts the agent's answer to an injected steer in the steered turn even when it beats Hydra's reply", async () => {
+    harness = await startBridgeHarness();
+    const { session, oracle } = await open();
+    hydra(agentStarted("a1"), 1_000);
+    hydra(said("working"), 1_100);
+    await session.waitFor((envelope) => envelope.action.type === "chat/delta");
+    harness.hydra.sessions.steer = async () => {
+      hydra(said("steered answer"), 1_200);
+      await sleep(30);
+      return { outcome: "injected" };
+    };
+
+    await dispatch(session, {
+      type: "chat/pendingMessageSet",
+      kind: "steering",
+      id: "s1",
+      message: { text: "change course", origin: { kind: "user" } },
+    });
+    hydra(agentEnded("a1", 400), 1_400);
+    await session.waitFor((envelope) => envelope.action.type === "chat/turnComplete" && (envelope.action as { turnId?: string }).turnId === "steer-s1");
+
+    const text = (turn: ChatState["turns"][number]) =>
+      turn.responseParts.map((part) => (part.kind === "markdown" ? part.content : "")).join("");
+    const state = chat(session, oracle);
+    expect(state.turns.map((turn) => [turn.id, turn.message.text, text(turn)])).toEqual([
+      ["a1", "", "working"],
+      ["steer-s1", "change course", "steered answer"],
+    ]);
+  });
+
+  it("decides a cancel on the turns Hydra reported while a steer was in flight, so it never reaches the next turn", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open();
+    hydra(agentStarted("a1"), 1_000);
+    await session.waitFor((envelope) => envelope.action.type === "chat/turnStarted");
+    let reply = (_result: { outcome: string }): void => undefined;
+    harness.hydra.sessions.steer = () =>
+      new Promise((resolve) => {
+        reply = resolve as typeof reply;
+      });
+    await dispatch(session, {
+      type: "chat/pendingMessageSet",
+      kind: "steering",
+      id: "s1",
+      message: { text: "change course", origin: { kind: "user" } },
+    });
+    hydra(agentEnded("a1", 400), 1_400);
+    hydra(agentStarted("a2"), 1_500);
+
+    const cancelled = dispatch(session, { type: "chat/turnCancelled", turnId: "a1", duration: 1 });
+    await sleep(50);
+    // The new turn's start retries the steer, which the cancel waits out too.
+    harness.hydra.sessions.steer = async () => ({ outcome: "promptRequired" });
+    reply({ outcome: "promptRequired" });
+    expect((await cancelled).rejectionReason).toBeDefined();
+    await sleep(50);
+    expect(harness.hydra.writes.map((write) => write.method)).not.toContain("session/cancel");
+  });
+
+  it("waits out a steer retried as the first one settles before deciding a cancel", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open();
+    hydra(agentStarted("a1"), 1_000);
+    await session.waitFor((envelope) => envelope.action.type === "chat/turnStarted");
+    const replies: Array<(result: { outcome: string }) => void> = [];
+    harness.hydra.sessions.steer = () =>
+      new Promise((resolve) => {
+        replies.push(resolve as (result: { outcome: string }) => void);
+      });
+    await dispatch(session, {
+      type: "chat/pendingMessageSet",
+      kind: "steering",
+      id: "s1",
+      message: { text: "change course", origin: { kind: "user" } },
+    });
+    const cancelled = dispatch(session, { type: "chat/turnCancelled", turnId: "a1", duration: 1 });
+    // Past the retry interval, the held chunk's delivery steers again and so holds again.
+    await sleep(600);
+    hydra(said("still going"), 1_100);
+    replies[0]!({ outcome: "promptRequired" });
+    await sleep(50);
+    expect(replies).toHaveLength(2);
+    hydra(agentEnded("a1", 400), 1_400);
+    hydra(agentStarted("a2"), 1_500);
+    await sleep(50);
+    expect(harness.hydra.writes.map((write) => write.method)).not.toContain("session/cancel");
+    harness.hydra.sessions.steer = async () => ({ outcome: "promptRequired" });
+    replies[1]!({ outcome: "promptRequired" });
+    expect((await cancelled).rejectionReason).toBeDefined();
+    await sleep(50);
+    expect(harness.hydra.writes.map((write) => write.method)).not.toContain("session/cancel");
+  });
+
+  it("stays attached until a steer sent just before the client left has settled", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open();
+    hydra(agentStarted("a1"), 1_000);
+    await session.waitFor((envelope) => envelope.action.type === "chat/turnStarted");
+    let reply = (_result: { outcome: string }): void => undefined;
+    harness.hydra.sessions.steer = () =>
+      new Promise((resolve) => {
+        reply = resolve as typeof reply;
+      });
+    await dispatch(session, {
+      type: "chat/pendingMessageSet",
+      kind: "steering",
+      id: "s1",
+      message: { text: "change course", origin: { kind: "user" } },
+    });
+    await session.client.unsubscribe(CHAT);
+    await session.client.unsubscribe(SESSION);
+    await sleep(100);
+    expect(harness.hydra.detaches).toEqual([]);
+    reply({ outcome: "injected" });
+    await sleep(100);
+    expect(harness.hydra.detaches).toEqual(["h1"]);
+  });
+
+  it("stays attached until a prompt sent just before the client left has run", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open();
+    await dispatch(session, { type: "chat/turnStarted", turnId: "t-away", startedAt: new Date().toISOString(), message: { text: "go", origin: { kind: "user" } } });
+    await session.client.unsubscribe(CHAT);
+    await session.client.unsubscribe(SESSION);
+    await sleep(100);
+    expect(harness.hydra.prompts).toHaveLength(1);
+    expect(harness.hydra.detaches).toEqual([]);
+    harness.hydra.prompts[0]!.end("end_turn");
+    await sleep(100);
+    expect(harness.hydra.detaches).toEqual(["h1"]);
+  });
+
   it("refuses to cancel a turn that is not running and sends Hydra no cancel", async () => {
     harness = await startBridgeHarness();
     const { session } = await open();

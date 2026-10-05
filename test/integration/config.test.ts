@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionState } from "@microsoft/agent-host-protocol";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { act } from "../support/harness.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_DIR, WORK_URI } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 describe("an agent's config options as session settings against a scratch daemon", () => {
@@ -23,7 +23,7 @@ describe("an agent's config options as session settings against a scratch daemon
   });
 
   async function prompted(agent: string): Promise<{ id: string; uri: string }> {
-    const id = await driver.newSession("/tmp", agent);
+    const id = await driver.newSession(WORK_DIR, agent);
     await driver.prompt(id, "ping");
     const uri = sessionOf(id, agent);
     await until("session listed", async () => {
@@ -134,7 +134,7 @@ describe("an agent's config options as session settings against a scratch daemon
     await ahp.session.client.request("createSession", {
       channel,
       provider: "fake-config",
-      workingDirectories: ["file:///tmp"],
+      workingDirectories: [WORK_URI],
       config: { "acp.effort": "high" },
     } as never);
     const hydraId = await until("session created", async () => {

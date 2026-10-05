@@ -5,7 +5,7 @@ import type { RootState } from "@microsoft/agent-host-protocol";
 import { ChatView } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { openSession } from "../support/harness.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_DIR } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 describe("model lists learned from sessions against a scratch daemon", () => {
@@ -34,7 +34,7 @@ describe("model lists learned from sessions against a scratch daemon", () => {
   });
 
   it("publishes an agent's models once a session of it is opened, and keeps them across a restart", async () => {
-    const id = await driver.newSession("/tmp", "fake-models");
+    const id = await driver.newSession(WORK_DIR, "fake-models");
     await driver.prompt(id, "ping");
     await until("session listed", async () => {
       const result = (await ahp.session.client.request("listSessions", { channel: ROOT } as never)) as unknown as {

@@ -2,7 +2,7 @@ import type { RootState } from "@microsoft/agent-host-protocol";
 import type { HydraClient } from "../../src/hydra/client.js";
 import { RpcError } from "../../src/rpc/peer.js";
 import { openSession, type Session } from "./harness.js";
-import type { ScratchDaemon } from "./scratch.js";
+import { WORK_DIR, type ScratchDaemon } from "./scratch.js";
 
 export interface SessionUpdate {
   sessionId: string;
@@ -62,7 +62,7 @@ export class Driver {
     return new Driver(await daemon.client());
   }
 
-  async newSession(cwd = "/tmp", agentId?: string): Promise<string> {
+  async newSession(cwd = WORK_DIR, agentId?: string): Promise<string> {
     const result = await this.client.request<{ sessionId: string }>("session/new", {
       cwd,
       mcpServers: [],
@@ -97,8 +97,15 @@ export class Driver {
   }
 
   // The fake agent's own record of what reached it (prompts, steers, cancels, permission answers).
+  // The log arrives as one chunk; anything before it is a previous turn's tail that reached this connection late.
   async agentLog(sessionId: string): Promise<string[]> {
-    return JSON.parse(await this.prompt(sessionId, "script:log")) as string[];
+    const from = this.updates.length;
+    await this.client.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "script:log" }] });
+    const chunks = this.updates
+      .slice(from)
+      .filter((u) => u.sessionId === sessionId && u.update.sessionUpdate === "agent_message_chunk")
+      .map((u) => u.update.content?.text ?? "");
+    return JSON.parse(chunks.at(-1) ?? "[]") as string[];
   }
 
   textSince(sessionId: string, from: number): string {

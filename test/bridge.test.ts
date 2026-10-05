@@ -116,7 +116,8 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     send({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } });
     send({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: " world" } });
     live.update({ update: { sessionUpdate: "usage_update", used: 5, size: 10 } });
-    await session.waitFor((e) => e.action.type === "chat/delta" && (e.action as { content?: string }).content === " world");
+    // The usage update was sent last, so its envelope is the one that says the client has caught up.
+    await session.waitFor((e) => e.action.type === "chat/usage");
     settle(session, oracle);
     const mid = harness.core.store.state(CHAT) as ChatState;
     expect(mid.activeTurn?.id).toBe("live1");
@@ -334,15 +335,34 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     expect(harness.core.hasSubscribers(CHAT)).toBe(false);
   });
 
+  it("renames the Hydra session from either channel, as VS Code sends the rename to the chat", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open(harness, version);
+    for (const [channel, title] of [[CHAT, "From the chat"], [SESSION, "From the session"]] as const) {
+      const { clientSeq } = session.client.dispatch(channel, act({ type: "session/titleChanged", title }));
+      const echo = await session.waitFor((e) => e.origin?.clientSeq === clientSeq);
+      expect(echo.rejectionReason).toBeUndefined();
+    }
+    expect(harness.hydra.writes.filter((write) => write.method === "PATCH").map((write) => write.params)).toEqual([
+      { title: "From the chat" },
+      { title: "From the session" },
+    ]);
+  });
+
   it("applies title changes from session_info_update and from the catalog", async () => {
     harness = await startBridgeHarness();
     const { session } = await open(harness, version);
     harness.hydra.listener!.update({ update: { sessionUpdate: "session_info_update", title: "Renamed live" } });
     await session.waitFor((e) => e.action.type === "session/titleChanged");
     expect((harness.core.store.state(SESSION) as SessionState).title).toBe("Renamed live");
+    const announced = await session.waitFor((e) => e.action.type === "session/chatUpdated");
+    expect(announced.action).toMatchObject({ chat: CHAT, changes: { title: "Renamed live" } });
+    expect((harness.core.store.state(CHAT) as { title: string }).title).toBe("Renamed live");
     harness.hydra.rows = [ROW({ title: "Renamed in Hydra", updatedAt: "2026-10-05T01:00:00.000Z" })];
     await sleep(300);
     expect((harness.core.store.state(SESSION) as SessionState).title).toBe("Renamed in Hydra");
+    expect((harness.core.store.state(SESSION) as SessionState).chats.find((chat) => chat.resource === CHAT)?.title).toBe("Renamed in Hydra");
+    expect((harness.core.store.state(CHAT) as { title: string }).title).toBe("Renamed in Hydra");
   });
 });
 

@@ -6,7 +6,7 @@ import type { ChatState, Snapshot, ToolCallState } from "@microsoft/agent-host-p
 import { ChatView, markdown, user } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { openSession } from "../support/harness.js";
-import { ScratchDaemon, sleep, until } from "../support/scratch.js";
+import { ScratchDaemon, sleep, until, WORK_DIR } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 describe("write path against a scratch daemon", () => {
@@ -48,7 +48,7 @@ describe("write path against a scratch daemon", () => {
 
   // A session the driver created and prompted once, so Hydra lists it, opened in AHP.
   async function open(agentId?: string): Promise<ChatView> {
-    const id = await driver.newSession("/tmp", agentId);
+    const id = await driver.newSession(WORK_DIR, agentId);
     await driver.prompt(id, "ping");
     await until("session listed", () => listed(id, agentId ?? "fake"));
     const view = await ChatView.open(ahp, id, agentId ?? "fake");
@@ -148,19 +148,32 @@ describe("write path against a scratch daemon", () => {
     driver.permissionAnswer = "allow";
     const log = await driver.agentLog(view.id);
     expect(log).toContain("permission:ask-1:cancelled");
-    expect(log.indexOf("permission:ask-1:cancelled")).toBeLessThan(log.indexOf("cancel"));
+    // The cancelled answer can end the agent's turn before Hydra handles the cancel, which then has nothing to forward.
+    const cancelAt = log.indexOf("cancel");
+    if (cancelAt >= 0) {
+      expect(log.indexOf("permission:ask-1:cancelled")).toBeLessThan(cancelAt);
+    }
   });
 
   it("abstains on a permission when no AHP client is subscribed to the chat", async () => {
     const view = await open();
     const release = gate();
     driver.permissionAnswer = "hold";
+    const updatesBefore = driver.updates.length;
     await view.startTurn("ahp-away", `script:gate ${release.path} then-ask`);
     await view.until("turn running", (chat) => chat.activeTurn?.id === "ahp-away");
     await view.close();
     views.splice(views.indexOf(view), 1);
     release.open();
-    await until("driver holds the request", () => driver.held.length === 1);
+    // This has timed out on CI runners but never locally; on a timeout, report where the turn got to.
+    await until("driver holds the request", () => driver.held.length === 1).catch(async (err: Error) => {
+      const row = await daemon.admin.getSession(view.id).catch(() => undefined);
+      throw new Error(
+        `${err.message}; held=${driver.held.length} permissions=${driver.permissions.length} busy=${String(row?.busy)} ` +
+          `attached=${String(row?.attachedClients)} agent said=${JSON.stringify(driver.textSince(view.id, updatesBefore))}\n` +
+          `row=${JSON.stringify(row)}\n${daemon.logLines(view.id)}`,
+      );
+    });
     // Anything but -32601 from the extension would already have settled the race.
     await sleep(500);
     driver.held.shift()!.answer("reject");

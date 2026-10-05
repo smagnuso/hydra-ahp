@@ -37,7 +37,14 @@ describe("uncommitted changes", () => {
     await harness?.stop();
     harness = undefined;
     if (dir) {
-      rmSync(dir, { recursive: true, force: true });
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+      } catch (err) {
+        // A git run the poller started can still have the directory as its cwd, which Windows will not delete; leave it to the OS.
+        if (process.platform !== "win32") {
+          throw err;
+        }
+      }
       dir = undefined;
     }
   });

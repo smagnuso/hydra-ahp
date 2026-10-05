@@ -192,6 +192,13 @@ export class HydraBackend implements Backend {
       if (summary && state && summary.title !== UNTITLED && state.title !== summary.title) {
         this.core.publish(uri, action({ type: "session/titleChanged", title: summary.title }));
       }
+      // VS Code titles a chat's tab from its chat state, which only session/chatUpdated naming the chat changes.
+      for (const chat of summary?.chats ?? []) {
+        const held = state?.chats.find((entry) => entry.resource === chat.resource);
+        if (held && chat.title && chat.title !== UNTITLED && held.title !== chat.title) {
+          this.core.publish(uri, action({ type: "session/chatUpdated", chat: chat.resource, changes: { title: chat.title } }));
+        }
+      }
     }
   }
 
@@ -215,6 +222,10 @@ export class HydraBackend implements Backend {
 
   // A session channel is a view of the catalog row; the chat channel is built by the bridge from Hydra's history.
   async attach(uri: string): Promise<void> {
+    if (isTerminalUri(uri)) {
+      this.terminals?.attachGone(uri);
+      return;
+    }
     if (isChangesetChannelUri(uri)) {
       this.changesets?.attach(uri);
       return;
@@ -244,6 +255,10 @@ export class HydraBackend implements Backend {
   }
 
   async detach(uri: string): Promise<void> {
+    if (isTerminalUri(uri)) {
+      this.terminals?.detachGone(uri);
+      return;
+    }
     if (isChangesetChannelUri(uri)) {
       this.changesets?.detach(uri);
       return;

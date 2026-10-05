@@ -4,7 +4,7 @@ import { ChatView, markdown, user } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { act, openSession, type Session } from "../support/harness.js";
 import { ReducerOracle } from "../support/oracle.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_URI } from "../support/scratch.js";
 import { chatOf, sessionOf } from "../support/chat-uri.js";
 
 describe("agent-initiated turns and attach mid-turn against a scratch daemon", () => {
@@ -365,7 +365,8 @@ describe("idle close and session GC against a scratch daemon", () => {
 
     await driver.attach(id);
     await driver.prompt(id, "from hydra");
-    const resumed = await view.until("turn after resurrect", (chat) => chat.turns.find((turn) => turn.message.text === "from hydra" && turn.state === "complete"));
+    // Waking a cold session respawns its agent, which is slow on Windows runners.
+    const resumed = await view.until("turn after resurrect", (chat) => chat.turns.find((turn) => turn.message.text === "from hydra" && turn.state === "complete"), 30_000);
     expect(markdown(resumed.responseParts)).toBe("pong");
     await driver.detach(id);
 
@@ -378,7 +379,7 @@ describe("idle close and session GC against a scratch daemon", () => {
 
   it("drops a never-prompted session the GC collected while subscribed, and keeps prompted ones", async () => {
     const channel = sessionOf("gc-unprompted");
-    await ahp.session.client.request("createSession", { channel, provider: "fake", workingDirectories: ["file:///tmp"] } as never);
+    await ahp.session.client.request("createSession", { channel, provider: "fake", workingDirectories: [WORK_URI] } as never);
     const view = await open("gc-unprompted");
     const kept = await driver.newSession();
     await driver.prompt(kept, "ping");
@@ -391,6 +392,8 @@ describe("idle close and session GC against a scratch daemon", () => {
     expect(await listed(channel)).toBe(false);
     await expect(ahp.session.client.subscribe(view.chatUri)).rejects.toMatchObject({ code: -32001 });
     expect(await listed(sessionOf(kept))).toBe(true);
-    expect((await daemon.admin.getSession(kept)).status).toBe("cold");
+    // Its own idle close runs on its own timer, which can trail the unprompted session's collection.
+    await until(`${kept} cold`, async () => (await daemon.admin.getSession(kept)).status === "cold", 30000);
+    expect(await listed(sessionOf(kept))).toBe(true);
   });
 });
