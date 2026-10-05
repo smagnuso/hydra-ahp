@@ -1,6 +1,7 @@
 import { ProtocolCore } from "./protocol/core.js";
 import { AhpListener } from "./server/listener.js";
 import { TokenRegistry } from "./store/tokens.js";
+import { FileService } from "./files/service.js";
 import { Catalog } from "./bridge/catalog.js";
 import { HydraBackend } from "./bridge/hydra-backend.js";
 import { COMMAND_SPEC, COMMAND_VERB, runTokenCommand } from "./commands/tokens.js";
@@ -9,6 +10,7 @@ import { HydraClient } from "./hydra/client.js";
 import { ExtensionState } from "./hydra/ext-state.js";
 import { HydraRest } from "./hydra/rest.js";
 import { checkHydraVersion } from "./hydra/version.js";
+import { ErrorCodes, RpcError } from "./rpc/peer.js";
 import { logger, setDebug } from "./util/log.js";
 
 const log = logger("app");
@@ -56,12 +58,20 @@ export async function startApp(config: Config, version: string): Promise<App> {
     ...(config.pollMs !== undefined ? { pollMs: config.pollMs } : {}),
     ...(config.warmPollMs !== undefined ? { warmPollMs: config.warmPollMs } : {}),
   });
-  const backend = new HydraBackend({ catalog, rest, extState, version });
+  const files = new FileService({ sessions: catalog, dirRoots: config.dirRoots });
+  const backend = new HydraBackend({ catalog, rest, extState, version, files });
   const core = new ProtocolCore({ backend });
   await core.start();
 
   const listener = new AhpListener({ core, tokens, port: config.port });
   const port = await listener.listen();
+
+  // The bridge advertises no fs capability; refuse any agent file request that arrives anyway.
+  for (const method of ["fs/read_text_file", "fs/write_text_file"]) {
+    client.peer.onRequest(method, () => {
+      throw new RpcError(ErrorCodes.MethodNotFound, `method not found: ${method}`);
+    });
+  }
 
   client.peer.onRequest("hydra-acp/commands/invoke", (raw) => {
     const params = (raw ?? {}) as { verb?: string; args?: string };
