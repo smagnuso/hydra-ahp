@@ -1,4 +1,5 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isSessionChannelUri } from "../protocol/channels.js";
 
 const SESSION_PREFIX = "ahp-session:/";
 const CHAT_PREFIX = "ahp-chat:/";
@@ -11,8 +12,14 @@ export function chatUri(id: string): string {
   return `${CHAT_PREFIX}${id}`;
 }
 
+const SCHEME = /^[a-z][a-z0-9+.-]*:\//i;
+
 export function isSessionUri(uri: string): boolean {
-  return uri.startsWith(SESSION_PREFIX) && uri.length > SESSION_PREFIX.length && !uri.includes("/", SESSION_PREFIX.length);
+  return isSessionChannelUri(uri);
+}
+
+export function isNativeSessionUri(uri: string): boolean {
+  return uri.startsWith(SESSION_PREFIX);
 }
 
 export function isChatUri(uri: string): boolean {
@@ -20,7 +27,7 @@ export function isChatUri(uri: string): boolean {
 }
 
 export function sessionKey(uri: string): string {
-  return uri.slice(SESSION_PREFIX.length);
+  return uri.replace(SCHEME, "");
 }
 
 export function chatKey(uri: string): string {

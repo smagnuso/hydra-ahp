@@ -17,15 +17,22 @@ export type ChannelKind = "root" | "session" | "chat";
 
 export type ChannelState = RootState | SessionState | ChatState;
 
+// Clients that create a session pick its URI, usually "<provider>:/<id>", so any such shape is a session channel.
+const SESSION_URI = /^(?!ahp-chat:|ahp-root:)[a-z][a-z0-9+.-]*:\/[^/]+$/i;
+
+export function isSessionChannelUri(uri: string): boolean {
+  return SESSION_URI.test(uri);
+}
+
 export function channelKind(uri: string): ChannelKind | undefined {
   if (uri === ROOT_URI) {
     return "root";
   }
-  if (uri.startsWith("ahp-session:")) {
-    return "session";
-  }
   if (uri.startsWith("ahp-chat:")) {
     return "chat";
+  }
+  if (isSessionChannelUri(uri)) {
+    return "session";
   }
   return undefined;
 }

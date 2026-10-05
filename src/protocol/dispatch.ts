@@ -20,6 +20,26 @@ function reject(reason: string): Validation {
   return { ok: false, reason };
 }
 
+const ACTIVE_TURN_ACTIONS = new Set([
+  "chat/toolCallConfirmed",
+  "chat/toolCallResultConfirmed",
+  "chat/toolCallContentChanged",
+  "chat/turnCancelled",
+]);
+
+// Some clients leave out the turnId these actions require; the only turn they can mean is the active one.
+export function withActiveTurn(state: ChannelState | undefined, action: StateAction): StateAction {
+  if (!ACTIVE_TURN_ACTIONS.has(action.type)) {
+    return action;
+  }
+  const given = (action as { turnId?: unknown }).turnId;
+  const active = (state as ChatState | undefined)?.activeTurn;
+  if ((typeof given === "string" && given !== "") || !active) {
+    return action;
+  }
+  return { ...action, turnId: active.id } as StateAction;
+}
+
 // Checks the spec's server validation rules and the per-version gate.
 export function validateAction(
   channel: string,

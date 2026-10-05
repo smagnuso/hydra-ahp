@@ -5,7 +5,7 @@ import type { ExtensionState } from "../hydra/ext-state.js";
 import type { HydraAgent, HydraRest, HydraSessionEntry, SessionPage } from "../hydra/rest.js";
 import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
-import { chatKey, chatUri, isChatUri, isFederatedId, sessionKey, sessionUri } from "./ids.js";
+import { chatKey, chatUri, isChatUri, isFederatedId, isNativeSessionUri, sessionKey, sessionUri } from "./ids.js";
 import { NO_FLAGS, type FlagStore, type SessionFlags } from "../store/flags.js";
 import { entryToSummary } from "./summary.js";
 
@@ -49,6 +49,7 @@ export class Catalog {
   private readonly entries = new Map<string, HydraSessionEntry>();
   private readonly stamps = new Map<string, string>();
   private readonly uriToId = new Map<string, string>();
+  private readonly keyToUri = new Map<string, string>();
   private readonly lookedUp = new Set<string>();
   private readonly published = new Map<string, SessionSummary>();
   private readonly pendingCreations = new Set<string>();
@@ -112,11 +113,20 @@ export class Catalog {
     if (stamped) {
       return stamped;
     }
+    if (!isNativeSessionUri(uri)) {
+      return undefined;
+    }
     const id = sessionKey(uri);
     if (this.stamps.has(id)) {
       return undefined;
     }
     return this.isListed(id) ? id : undefined;
+  }
+
+  // A chat's key is its session's key, whatever scheme the client gave the session.
+  sessionUriForChat(chat: string): string {
+    const key = chatKey(chat);
+    return this.keyToUri.get(key) ?? sessionUri(key);
   }
 
   flagsFor(hydraId: string): SessionFlags {
@@ -157,7 +167,7 @@ export class Catalog {
     if (!isChatUri(chat)) {
       return undefined;
     }
-    const hydraId = this.resolve(sessionUri(chatKey(chat)));
+    const hydraId = this.resolve(this.sessionUriForChat(chat));
     return hydraId ? this.fileSessions().find((session) => session.id === hydraId) : undefined;
   }
 
@@ -250,6 +260,7 @@ export class Catalog {
     this.lookedUp.delete(id);
     if (uri) {
       this.uriToId.delete(uri);
+      this.keyToUri.delete(sessionKey(uri));
     }
   }
 
@@ -267,6 +278,7 @@ export class Catalog {
           if (typeof value === "string" && !this.stamps.has(id)) {
             this.stamps.set(id, value);
             this.uriToId.set(value, id);
+            this.keyToUri.set(sessionKey(value), value);
           }
           this.lookedUp.add(id);
         } catch (err) {
@@ -394,12 +406,14 @@ export class Catalog {
   // Registers a session this extension is creating so the first poll cannot hide or duplicate it.
   beginCreation(uri: string, summary: SessionSummary): void {
     this.pendingCreations.add(uri);
+    this.keyToUri.set(sessionKey(uri), uri);
     this.published.set(uri, summary);
     this.core.notify(ROOT_URI, "root/sessionAdded", { channel: ROOT_URI, summary });
   }
 
   failCreation(uri: string): void {
     this.pendingCreations.delete(uri);
+    this.keyToUri.delete(sessionKey(uri));
     this.published.delete(uri);
     this.core.notify(ROOT_URI, "root/sessionRemoved", { channel: ROOT_URI, session: uri });
   }
@@ -407,6 +421,7 @@ export class Catalog {
   claim(hydraId: string, uri: string, entry: HydraSessionEntry): void {
     this.stamps.set(hydraId, uri);
     this.uriToId.set(uri, hydraId);
+    this.keyToUri.set(sessionKey(uri), uri);
     this.lookedUp.add(hydraId);
     this.entries.set(hydraId, entry);
     this.pendingCreations.delete(uri);

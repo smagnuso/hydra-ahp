@@ -10,7 +10,7 @@ import type { TokenInfo } from "../store/tokens.js";
 import { logger } from "../util/log.js";
 import type { ProtocolCore } from "./core.js";
 import type { ActionDecision } from "./backend.js";
-import { validateAction } from "./dispatch.js";
+import { validateAction, withActiveTurn } from "./dispatch.js";
 import { SUPPORTED_VERSIONS, isActionAllowed, negotiate, shapeSummary } from "./negotiate.js";
 
 const log = logger("connection");
@@ -82,7 +82,7 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
       });
     }
     adopt(clientId, version);
-    const snapshots = await subscribeAll(initial);
+    const snapshots = await tracked(subscribeAll(initial));
     const result: InitializeResult = {
       protocolVersion: version,
       serverSeq: core.store.serverSeq,
@@ -109,7 +109,7 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
 
     const uris = [...new Set(requested)];
     const unavailable = new Set<string>();
-    await Promise.all(
+    await tracked(Promise.all(
       uris.map(async (uri) => {
         try {
           await core.ensureAttached(uri);
@@ -117,7 +117,7 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
           unavailable.add(uri);
         }
       }),
-    );
+    ));
     if (connection.closed) {
       for (const uri of uris) {
         core.detachIfIdle(uri);
@@ -168,10 +168,21 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
     return snapshot;
   }
 
+  // Clients may send a dispatchAction right behind a subscribe without waiting for its reply.
+  const joining = new Set<Promise<unknown>>();
+  const tracked = <T>(work: Promise<T>): Promise<T> => {
+    joining.add(work);
+    const forget = (): void => {
+      joining.delete(work);
+    };
+    work.then(forget, forget);
+    return work;
+  };
+
   peer.onRequest("subscribe", async (raw) => {
     ready();
     const params = asObject(raw);
-    const snapshot = await subscribeOne(requireString(params, "channel"));
+    const snapshot = await tracked(subscribeOne(requireString(params, "channel")));
     return snapshot ? { snapshot } : {};
   });
 
@@ -194,7 +205,8 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
   });
 
   peer.onNotification("dispatchAction", (raw) => {
-    dispatchQueue = dispatchQueue.then(() => dispatchAction(raw)).catch((err) => {
+    const behind = Promise.allSettled([...joining]);
+    dispatchQueue = dispatchQueue.then(() => behind).then(() => dispatchAction(raw)).catch((err) => {
       log.error("dispatchAction failed", err);
     });
   });
@@ -212,7 +224,7 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
       return;
     }
     const origin: ActionOrigin = { clientId: connection.clientId, clientSeq };
-    const typed = action as StateAction;
+    const typed = withActiveTurn(core.store.state(channel), action as StateAction);
     const refuse = (reason: string): void => {
       core.sendRejection(connection, channel, typed, origin, reason);
     };

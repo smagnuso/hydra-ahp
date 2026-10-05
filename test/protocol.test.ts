@@ -189,6 +189,22 @@ describe.each(["0.9.0", "1.0.0"])("protocol at %s", (version) => {
       await expectRejected(CHAT, { type: "chat/toolCallConfirmed", turnId: "t1", toolCallId: "call1", approved: false, reason: "user-action" }, /not pending confirmation/);
     });
 
+    it("fills in the active turn when a client leaves the turnId out of a confirmation", async () => {
+      session.client.dispatch(CHAT, act(turnStarted()));
+      await session.waitFor((e) => e.action.type === "chat/turnStarted");
+      harness.backend.askConfirmation(CHAT, "t1", "call1");
+      await session.waitFor((e) => e.action.type === "chat/toolCallReady");
+      const { clientSeq } = session.client.dispatch(
+        CHAT,
+        act({ type: "chat/toolCallConfirmed", toolCallId: "call1", approved: true, confirmed: "user-action" }),
+      );
+      const echo = await session.waitFor((e) => e.origin?.clientSeq === clientSeq && e.action.type === "chat/toolCallConfirmed");
+      expect(echo.rejectionReason).toBeUndefined();
+      expect((echo.action as { turnId?: string }).turnId).toBe("t1");
+      const call = (harness.core.store.state(CHAT) as ChatState).activeTurn?.responseParts.find((part) => part.kind === "toolCall");
+      expect(call?.kind === "toolCall" ? call.toolCall.status : undefined).not.toBe("pending-confirmation");
+    });
+
     it("rejects turnCancelled with no active turn", async () => {
       await expectRejected(CHAT, { type: "chat/turnCancelled", turnId: "t1", duration: 1 }, /no active turn/);
     });
@@ -269,7 +285,8 @@ describe.each(["0.9.0", "1.0.0"])("protocol at %s", (version) => {
     it("reports subscribe failures and unknown methods", async () => {
       await session.client.initialize({ clientId: "c1", protocolVersions: offers() });
       await expect(session.client.subscribe("ahp-session:/ghost")).rejects.toMatchObject({ code: -32001 });
-      await expect(session.client.subscribe("ahp-terminal:/t")).rejects.toMatchObject({ code: -32602 });
+      await expect(session.client.subscribe("ahp-terminal:/t")).rejects.toMatchObject({ code: -32001 });
+      await expect(session.client.subscribe("not-a-channel")).rejects.toMatchObject({ code: -32602 });
       await expect(session.client.request("resourceList", { channel: ROOT, uri: "file:///" } as never)).rejects.toMatchObject({ code: -32601 });
       await expect(session.client.request("initialize", { channel: ROOT } as never)).rejects.toBeInstanceOf(RpcError);
     });

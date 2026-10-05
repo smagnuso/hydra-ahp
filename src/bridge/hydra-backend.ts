@@ -13,7 +13,7 @@ import type { HydraRest } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
 import { AHP_URI_KEY, type Catalog } from "./catalog.js";
-import { chatKey, chatUri, cwdToUri, isChatUri, isSessionUri, sessionKey, sessionUri, uriToCwd } from "./ids.js";
+import { chatUri, cwdToUri, isChatUri, isSessionUri, sessionKey, uriToCwd } from "./ids.js";
 import { emptyChat } from "./replay.js";
 import { SessionBridge } from "./session-bridge.js";
 import { STATUS_IDLE, UNTITLED, entryToSummary, summaryToSessionState } from "./summary.js";
@@ -53,6 +53,7 @@ export class HydraBackend implements Backend {
   private readonly extState: ExtensionState;
   private readonly sessions: HydraSessions;
   private readonly bridges = new Map<string, SessionBridge>();
+  private readonly creating = new Map<string, Promise<void>>();
   private readonly files: FileService;
 
   constructor(options: HydraBackendOptions) {
@@ -79,7 +80,7 @@ export class HydraBackend implements Backend {
 
   // The bridge for a session or chat channel, once the session exists in Hydra.
   bridgeFor(channel: string): SessionBridge | undefined {
-    const session = isChatUri(channel) ? sessionUri(chatKey(channel)) : channel;
+    const session = isChatUri(channel) ? this.catalog.sessionUriForChat(channel) : channel;
     const hydraId = this.catalog.resolve(session);
     if (!hydraId) {
       return undefined;
@@ -146,7 +147,7 @@ export class HydraBackend implements Backend {
   // A session channel is a view of the catalog row; the chat channel is built by the bridge from Hydra's history.
   async attach(uri: string): Promise<void> {
     if (isChatUri(uri)) {
-      if (this.core.store.has(uri) && !this.catalog.resolve(sessionUri(chatKey(uri)))) {
+      if (this.core.store.has(uri) && !this.catalog.resolve(this.catalog.sessionUriForChat(uri))) {
         return;
       }
       await this.bridgeFor(uri)?.attach();
@@ -175,6 +176,9 @@ export class HydraBackend implements Backend {
     if (!isChatUri(channel) && !isSessionUri(channel)) {
       return { accept: false, reason: "this host does not accept that action" };
     }
+    // Clients may act on a session they just created before it is ready; hold the action until it is.
+    const session = isChatUri(channel) ? this.catalog.sessionUriForChat(channel) : channel;
+    await this.creating.get(session);
     const bridge = this.bridgeFor(channel);
     if (!bridge) {
       return { accept: false, reason: "the session is not ready yet" };
@@ -216,7 +220,7 @@ export class HydraBackend implements Backend {
   private createSession(params: Record<string, unknown>): null {
     const channel = params.channel;
     if (typeof channel !== "string" || !isSessionUri(channel)) {
-      throw new RpcError(ErrorCodes.InvalidParams, "channel must be an ahp-session: URI");
+      throw new RpcError(ErrorCodes.InvalidParams, "channel must be a session URI such as <provider>:/<id>");
     }
     const provider = typeof params.provider === "string" ? params.provider : undefined;
     if (provider !== undefined && !this.catalog.hasAgent(provider)) {
@@ -249,7 +253,10 @@ export class HydraBackend implements Backend {
     this.catalog.beginCreation(channel, summary);
     this.core.createChannel(channel, summaryToSessionState(summary, "creating"));
     this.core.createChannel(chat, emptyChat(chat, summary.title, now, STATUS_IDLE));
-    void this.finishCreation(channel, provider, cwd);
+    const finishing = this.finishCreation(channel, provider, cwd).finally(() => {
+      this.creating.delete(channel);
+    });
+    this.creating.set(channel, finishing);
     return null;
   }
 
@@ -265,6 +272,13 @@ export class HydraBackend implements Backend {
       const entry = await this.rest.getSession(hydraId);
       this.catalog.claim(hydraId, channel, entry);
       this.core.publish(channel, action({ type: "session/ready" }));
+      // A client may have subscribed to the chat while the session was being created.
+      const chat = chatUri(sessionKey(channel));
+      if (this.core.hasSubscribers(chat)) {
+        await this.bridgeFor(chat)?.attach().catch((err) => {
+          log.warn(`attach after creating ${channel} failed`, message(err));
+        });
+      }
     } catch (err) {
       log.warn(`createSession ${channel} failed`, message(err));
       if (hydraId) {
