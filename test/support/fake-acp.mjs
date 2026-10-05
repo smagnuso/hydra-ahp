@@ -144,9 +144,9 @@ const scripts = {
     chunk(sessionId, `steered:${outcome.text}`);
     return "end_turn";
   },
-  // Runs until the named file exists, so a test decides when the turn ends.
+  // Runs until the named file exists, so a test decides when the turn ends; "then-ask" asks permission after.
   async gate(sessionId, text) {
-    const path = text.split(/\s+/)[1];
+    const [, path, then] = text.split(/\s+/);
     chunk(sessionId, "gated ");
     while (!existsSync(path)) {
       if (await cancellable(50)) {
@@ -154,6 +154,9 @@ const scripts = {
       }
     }
     chunk(sessionId, "released");
+    if (then === "then-ask") {
+      return scripts.ask(sessionId);
+    }
     return "end_turn";
   },
   // Ends the turn, then starts one of its own and reports its end the way claude-acp does.
