@@ -48,8 +48,9 @@ is a Hydra client downstream: `/acp` with the per-process extension token in
   tracking, prompt conversion, the backend tying them together
 - `src/files/`: `resource*` commands and `@` completions, gated by token level
 - `src/hydra/`: `/acp` client, REST client, `extension_state`, version check
-- `src/store/`: token registry (`tokens.json`) and read/archive flags
-  (`flags.json`), both 0600 under `<hydra home>/extensions/ahp/`
+- `src/store/`: token registry (`tokens.json`), read/archive flags
+  (`flags.json`) and per-agent model lists (`models.json`), all 0600 under
+  `<hydra home>/extensions/ahp/`
 - `src/commands/`: the `/hydra ahp token ...` verbs
 - `scripts/record-host.mjs`: frame-logging stub host for recon
 - `test/`: unit tests plus `test/integration/` against scratch daemons

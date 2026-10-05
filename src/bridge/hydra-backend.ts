@@ -347,7 +347,7 @@ export class HydraBackend implements Backend {
     }
   }
 
-  // REST rather than ACP session/delete: the ACP verb answers success without removing the session.
+  // REST rather than ACP session/delete: daemons up to 0.1.197 register that verb for transformer connections only, so other clients reach the agent instead.
   private async deleteHydraSession(hydraId: string): Promise<void> {
     try {
       await this.rest.deleteSession(hydraId);

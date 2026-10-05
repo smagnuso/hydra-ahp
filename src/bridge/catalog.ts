@@ -7,6 +7,7 @@ import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
 import { chatKey, chatUri, isChatUri, isFederatedId, isNativeSessionUri, sessionKey, sessionUri } from "./ids.js";
 import { NO_FLAGS, type FlagStore, type SessionFlags } from "../store/flags.js";
+import type { KnownModel, ModelStore } from "../store/models.js";
 import { groupToSummary, type GroupMember } from "./summary.js";
 
 const log = logger("catalog");
@@ -22,6 +23,7 @@ export interface CatalogOptions {
   rest: HydraRest;
   extState: ExtensionState;
   flags?: FlagStore;
+  models?: ModelStore;
   pollMs?: number;
   warmPollMs?: number;
   agentsEveryPolls?: number;
@@ -62,6 +64,7 @@ export class Catalog {
   private readonly changeListeners = new Set<() => void>();
   private cursor: number | undefined;
   private polls = 0;
+  private rawAgents: HydraAgent[] = [];
   private agentList: AgentInfo[] = [];
   private pollTimer: NodeJS.Timeout | undefined;
   private warmTimer: NodeJS.Timeout | undefined;
@@ -427,7 +430,23 @@ export class Catalog {
   }
 
   private async refreshAgents(): Promise<void> {
-    const agents = await this.fetchAgents();
+    this.rawAgents = (await this.rest.agents()).agents;
+    this.republishAgents();
+  }
+
+  private async fetchAgents(): Promise<AgentInfo[]> {
+    this.rawAgents = (await this.rest.agents()).agents;
+    return this.buildAgents();
+  }
+
+  private buildAgents(): AgentInfo[] {
+    return this.rawAgents
+      .filter((agent) => agent.installed !== "no")
+      .map((agent) => toAgentInfo(agent, this.options.models?.get(agent.id) ?? []));
+  }
+
+  private republishAgents(): void {
+    const agents = this.buildAgents();
     if (JSON.stringify(agents) === JSON.stringify(this.agentList)) {
       return;
     }
@@ -435,9 +454,20 @@ export class Catalog {
     this.core.publish(ROOT_URI, action({ type: "root/agentsChanged", agents }));
   }
 
-  private async fetchAgents(): Promise<AgentInfo[]> {
-    const { agents } = await this.rest.agents();
-    return agents.filter((agent) => agent.installed !== "no").map(toAgentInfo);
+  // A session of an agent is the only place Hydra reveals its models; remember them for the model picker.
+  noteModels(agentId: string | undefined, advertised: unknown): void {
+    if (!agentId || !this.options.models || !Array.isArray(advertised)) {
+      return;
+    }
+    const models: KnownModel[] = advertised.flatMap((item) => {
+      const entry = item as { modelId?: unknown; name?: unknown };
+      return typeof entry.modelId === "string"
+        ? [{ id: entry.modelId, name: typeof entry.name === "string" && entry.name !== "" ? entry.name : entry.modelId }]
+        : [];
+    });
+    if (this.options.models.set(agentId, models) && this.ready) {
+      this.republishAgents();
+    }
   }
 
   // Paging is keyset based (newest first) so a concurrent change never repeats or skips a row.
@@ -504,12 +534,12 @@ export class Catalog {
   }
 }
 
-function toAgentInfo(agent: HydraAgent): AgentInfo {
+function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[]): AgentInfo {
   return {
     provider: agent.id,
     displayName: agent.name || agent.id,
     description: agent.description ?? "",
-    models: [],
+    models: models.map((model) => ({ id: model.id, provider: agent.id, name: model.name })),
     capabilities: { multipleChats: { fork: true } },
   };
 }

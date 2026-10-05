@@ -307,6 +307,8 @@ export class SessionBridge implements SessionListener {
       throw toRpc(err);
     }
 
+    this.deps.catalog.noteModels(this.entry()?.agentId, meta.availableModels);
+
     // Everything from here to the end of the method is synchronous, so no live frame can slip between the history and the join.
     const held = core.store.state(chatUri) as ChatState | undefined;
     const subscribed = core.hasSubscribers(chatUri) && held !== undefined;

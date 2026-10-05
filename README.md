@@ -137,6 +137,9 @@ token leaks, `token revoke <id>` closes its connections immediately.
 - No terminals, changesets, automations or customizations.
 - No file watches (`createResourceWatch` returns `-32601` at every level).
 - No elicitation (`chat/inputRequested`); Hydra has no counterpart.
+- Model lists are learned from sessions: Hydra only reveals an agent's models
+  once a session of it exists, so an agent's model picker fills in after its
+  first session on this host (kept in `models.json`).
 - Loopback only; no TLS and no remote access.
 - New sessions are created on the local Hydra only, not on federated remotes
   (existing federated sessions are listed and driven, ids stay `name:localId`).
