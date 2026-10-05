@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const MAX_BUFFER = 64 * 1024 * 1024;
 // Untracked files are counted line by line; past this size they are shown without a count.
@@ -36,9 +36,12 @@ function fields(output: Buffer): string[] {
   return output.toString("utf8").split("\0").filter((entry) => entry !== "");
 }
 
+// Walks up from cwd rather than taking --show-toplevel, which resolves symlinks and would name files by a path the session does not use.
 export async function repoRoot(cwd: string): Promise<string | undefined> {
   try {
-    return (await git(cwd, ["rev-parse", "--show-toplevel"])).toString("utf8").trim() || undefined;
+    const prefix = (await git(cwd, ["rev-parse", "--show-prefix"])).toString("utf8").trim();
+    const depth = prefix.split("/").filter((segment) => segment !== "").length;
+    return resolve(cwd, ...Array<string>(depth).fill(".."));
   } catch {
     return undefined;
   }
