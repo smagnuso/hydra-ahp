@@ -29,21 +29,54 @@ export function withFlagBits(status: number, flags: SessionFlags): number {
   return next;
 }
 
+export interface GroupMember {
+  entry: HydraSessionEntry;
+  chat: string;
+  flags: SessionFlags;
+}
+
+export const UNTITLED_CHAT = "Untitled chat";
+
+// The session's activity is the busiest of its chats: waiting on input over streaming over idle.
+function groupActivity(members: readonly GroupMember[]): number {
+  let activity = STATUS_IDLE;
+  for (const member of members) {
+    const bits = statusBits(member.entry);
+    if (bits === STATUS_INPUT_NEEDED) {
+      return STATUS_INPUT_NEEDED;
+    }
+    if (bits === STATUS_IN_PROGRESS) {
+      activity = STATUS_IN_PROGRESS;
+    }
+  }
+  return activity;
+}
+
+// One AHP session summary for a group of Hydra sessions; the first member is the default chat and speaks for the session.
 // Federated rows are labelled with the remote's name through the project grouping.
-export function entryToSummary(entry: HydraSessionEntry, uri: string, flags: SessionFlags = NO_FLAGS): SessionSummary {
-  const modifiedAt = entry.updatedAt ?? new Date(0).toISOString();
+export function groupToSummary(members: readonly GroupMember[], uri: string): SessionSummary {
+  const lead = members[0] as GroupMember;
+  const entry = lead.entry;
+  const modifiedAt = members.reduce((latest, member) => {
+    const at = member.entry.updatedAt ?? "";
+    return at > latest ? at : latest;
+  }, "") || new Date(0).toISOString();
   const title = entry.title || UNTITLED;
-  const chat = chatUri(sessionKey(uri));
   const remote = entry.remote;
   const summary: Record<string, unknown> = {
     resource: uri,
     provider: entry.agentId ?? "unknown",
     title,
-    status: withFlagBits(statusBits(entry), flags),
+    status: withFlagBits(groupActivity(members), lead.flags),
     createdAt: entry.createdAt ?? modifiedAt,
     modifiedAt,
-    chats: [{ resource: chat, title }],
-    defaultChat: chat,
+    chats: members.map((member) => ({
+      resource: member.chat,
+      title: member.entry.title || (member === lead ? title : UNTITLED_CHAT),
+      status: withFlagBits(statusBits(member.entry), member.flags),
+      modifiedAt: member.entry.updatedAt ?? modifiedAt,
+    })),
+    defaultChat: lead.chat,
   };
   if (entry.cwd && !remote && !isFederatedId(entry.sessionId)) {
     summary.workingDirectories = [cwdToUri(entry.cwd)];
@@ -55,6 +88,10 @@ export function entryToSummary(entry: HydraSessionEntry, uri: string, flags: Ses
   return summary as unknown as SessionSummary;
 }
 
+export function entryToSummary(entry: HydraSessionEntry, uri: string, flags: SessionFlags = NO_FLAGS): SessionSummary {
+  return groupToSummary([{ entry, chat: chatUri(sessionKey(uri)), flags }], uri);
+}
+
 export function summaryToSessionState(
   summary: SessionSummary,
   lifecycle: "creating" | "ready",
@@ -62,8 +99,8 @@ export function summaryToSessionState(
   const chats = (summary.chats ?? []).map((chat) => ({
     resource: chat.resource,
     title: chat.title,
-    status: summary.status,
-    modifiedAt: summary.modifiedAt,
+    status: chat.status ?? summary.status,
+    modifiedAt: (chat as { modifiedAt?: string }).modifiedAt ?? summary.modifiedAt,
   }));
   const { createdAt: _createdAt, modifiedAt: _modifiedAt, chats: _chats, _meta, ...metadata } = summary;
   return {

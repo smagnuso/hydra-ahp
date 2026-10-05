@@ -17,7 +17,9 @@ commands are `/hydra ahp <verb>`.
 The design lives in `plan-ahp-extension.md` one directory up
 (`~/dev/hydra-acp/`). Its Decisions table (D1 to D11) is settled.
 
-Scope for v1: one AHP session is one Hydra session is one chat. No
+Scope for v1: an AHP session is a group of Hydra sessions, each one a chat;
+a session nobody added chats to is a group of one. Hydra sessions share an AHP
+session when `extension_state` stamps them with the same `ahpUri`. No
 terminals, changesets, automations, customizations or non-loopback access.
 
 ## How it fits into Hydra

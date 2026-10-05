@@ -256,7 +256,10 @@ export class SessionBridge implements SessionListener {
     }
     const { core, rest, sessions, hydraId, chatUri } = this.deps;
     this.ensureSessionChannel();
-    const viewer = !forceLive && this.entry()?.status === "cold";
+    const own = this.entry();
+    // A fork nobody has attached yet only gets its history when its agent loads it, which a read-only viewer never triggers.
+    const pristineFork = own?.forkedFromSessionId !== undefined && !own.upstreamSessionId;
+    const viewer = !forceLive && own?.status === "cold" && !pristineFork;
     const pending: Pending[] = [];
     this.buffering = pending;
     this.sawClosed = false;
@@ -334,7 +337,7 @@ export class SessionBridge implements SessionListener {
     }
 
     const summary = this.deps.catalog.summaryFor(this.deps.sessionUri);
-    const base = held ?? emptyChat(chatUri, summary?.title ?? "", summary?.modifiedAt ?? new Date(0).toISOString(), withFlagBits(STATUS_IDLE, this.deps.catalog.flagsFor(this.deps.hydraId)));
+    const base = held ?? emptyChat(chatUri, own?.title || summary?.title || "", own?.updatedAt ?? summary?.modifiedAt ?? new Date(0).toISOString(), withFlagBits(STATUS_IDLE, this.deps.catalog.flagsFor(this.deps.hydraId)));
     const plan = this.reconcilePlan(base, produced, cursor);
     // Replaying turns clears the read bit in the official reducers; the stored mark survives a replay.
     if (this.deps.catalog.flagsFor(this.deps.hydraId).isRead) {
@@ -494,7 +497,12 @@ export class SessionBridge implements SessionListener {
     const { core, catalog, hydraId, sessionUri, chatUri } = this.deps;
     catalog.setFlags(hydraId, { [flag]: value });
     const bit = flag === "isRead" ? STATUS_IS_READ : STATUS_IS_ARCHIVED;
+    // Only the default chat shares its marks with the session.
+    const shared = catalog.isDefaultMember(hydraId);
     for (const [channel, kind] of [[sessionUri, "session"], [chatUri, "chat"]] as const) {
+      if (kind === "session" && !shared) {
+        continue;
+      }
       const state = core.store.state(channel) as { status?: number } | undefined;
       if (channel !== origin && state && (((state.status ?? 0) & bit) !== 0) !== value) {
         core.publish(channel, action({ type: `${kind}/${flag}Changed`, [flag]: value }));
@@ -503,13 +511,23 @@ export class SessionBridge implements SessionListener {
     return ACCEPT;
   }
 
+  // The default chat names the session; any other chat only names itself.
   private applyTitle(title: string | undefined): void {
-    const { core, sessionUri } = this.deps;
+    const { core, catalog, hydraId, sessionUri, chatUri } = this.deps;
     const state = core.store.state(sessionUri) as SessionState | undefined;
-    if (!title || !state || state.title === title) {
+    if (!title || !state) {
       return;
     }
-    core.publish(sessionUri, action({ type: "session/titleChanged", title }));
+    if (!catalog.isDefaultMember(hydraId)) {
+      const held = state.chats.find((entry) => entry.resource === chatUri);
+      if (held && held.title !== title) {
+        core.publish(sessionUri, action({ type: "session/chatUpdated", chat: chatUri, changes: { title } }));
+      }
+      return;
+    }
+    if (state.title !== title) {
+      core.publish(sessionUri, action({ type: "session/titleChanged", title }));
+    }
   }
 
   private publish(actions: Json[]): void {
@@ -538,7 +556,7 @@ export class SessionBridge implements SessionListener {
     }
     catalog.setFlags(hydraId, { isRead: false });
     const session = core.store.state(sessionUri) as SessionState | undefined;
-    if (session && (session.status & STATUS_IS_READ) !== 0) {
+    if (session && catalog.isDefaultMember(hydraId) && (session.status & STATUS_IS_READ) !== 0) {
       core.publish(sessionUri, action({ type: "session/isReadChanged", isRead: false }));
     }
   }
@@ -595,6 +613,26 @@ export class SessionBridge implements SessionListener {
     if (warm && (!this.attached || this.mode === "viewer")) {
       this.ensureLive().catch((err) => log.warn(`re-attach ${this.deps.hydraId} failed`, toRpc(err).message));
     }
+  }
+
+  // The Hydra message id behind an AHP turn id; turns Hydra started carry the same id on both sides.
+  messageIdFor(turnId: string): string {
+    for (const [messageId, id] of this.mapper.aliases) {
+      if (id === turnId) {
+        return messageId;
+      }
+    }
+    return turnId;
+  }
+
+  // The first turn of a chat created with an initial message: announced to the chat's subscribers, then sent to Hydra.
+  async startInitial(turnId: string, message: Json): Promise<void> {
+    const startedAt = new Date().toISOString();
+    const decision = await this.handleAction(this.deps.chatUri, { type: "chat/turnStarted", turnId, startedAt, message } as never);
+    if (!decision.accept) {
+      throw new Error(decision.reason);
+    }
+    this.deps.core.publish(this.deps.chatUri, action({ type: "chat/turnStarted", turnId, startedAt, message }));
   }
 
   // Client actions on this session's channels, one at a time so writes reach Hydra in the order they were accepted.

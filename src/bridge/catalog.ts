@@ -7,11 +7,12 @@ import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
 import { chatKey, chatUri, isChatUri, isFederatedId, isNativeSessionUri, sessionKey, sessionUri } from "./ids.js";
 import { NO_FLAGS, type FlagStore, type SessionFlags } from "../store/flags.js";
-import { entryToSummary } from "./summary.js";
+import { groupToSummary, type GroupMember } from "./summary.js";
 
 const log = logger("catalog");
 
 export const AHP_URI_KEY = "ahpUri";
+export const AHP_CHAT_KEY = "ahpChat";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 500;
@@ -48,8 +49,13 @@ export class Catalog {
   private readonly extState: ExtensionState;
   private readonly entries = new Map<string, HydraSessionEntry>();
   private readonly stamps = new Map<string, string>();
-  private readonly uriToId = new Map<string, string>();
-  private readonly keyToUri = new Map<string, string>();
+  // The chat URI a Hydra session was added under and when; the session that started the AHP session has none and is the default chat.
+  private readonly chatStamps = new Map<string, { chat: string; at: number }>();
+  // The sessions and chats clients can address, rebuilt by every reconcile: a session URI maps to its member Hydra ids, oldest (the default chat) first.
+  private readonly groups = new Map<string, string[]>();
+  private readonly chatToId = new Map<string, string>();
+  // Sessions and chats this extension is still creating, mapped to the session URI they belong to.
+  private readonly pendingChats = new Map<string, string>();
   private readonly lookedUp = new Set<string>();
   private readonly published = new Map<string, SessionSummary>();
   private readonly pendingCreations = new Set<string>();
@@ -104,29 +110,43 @@ export class Catalog {
     return this.agentList.some((agent) => agent.provider === provider);
   }
 
-  uriFor(hydraId: string): string {
+  // The AHP session a Hydra session belongs to: its stamp, or "ahp-session:/<id>" for one the extension did not create.
+  groupOf(hydraId: string): string {
     return this.stamps.get(hydraId) ?? sessionUri(hydraId);
   }
 
-  resolve(uri: string): string | undefined {
-    const stamped = this.uriToId.get(uri);
-    if (stamped) {
-      return stamped;
-    }
-    if (!isNativeSessionUri(uri)) {
-      return undefined;
-    }
-    const id = sessionKey(uri);
-    if (this.stamps.has(id)) {
-      return undefined;
-    }
-    return this.isListed(id) ? id : undefined;
+  uriFor(hydraId: string): string {
+    return this.groupOf(hydraId);
   }
 
-  // A chat's key is its session's key, whatever scheme the client gave the session.
+  chatOf(hydraId: string): string {
+    return this.chatStamps.get(hydraId)?.chat ?? chatUri(sessionKey(this.groupOf(hydraId)));
+  }
+
+  membersOf(sessionUri: string): string[] {
+    return this.groups.get(sessionUri) ?? [];
+  }
+
+  isDefaultMember(hydraId: string): boolean {
+    return this.membersOf(this.groupOf(hydraId))[0] === hydraId;
+  }
+
+  // The default chat's Hydra session, which speaks for the AHP session.
+  resolve(uri: string): string | undefined {
+    return this.groups.get(uri)?.[0];
+  }
+
+  resolveChat(chat: string): string | undefined {
+    return this.chatToId.get(chat);
+  }
+
+  // The AHP session a chat channel belongs to, including a chat still being created.
   sessionUriForChat(chat: string): string {
-    const key = chatKey(chat);
-    return this.keyToUri.get(key) ?? sessionUri(key);
+    const id = this.chatToId.get(chat);
+    if (id) {
+      return this.groupOf(id);
+    }
+    return this.pendingChats.get(chat) ?? sessionUri(chatKey(chat));
   }
 
   flagsFor(hydraId: string): SessionFlags {
@@ -167,12 +187,16 @@ export class Catalog {
     if (!isChatUri(chat)) {
       return undefined;
     }
-    const hydraId = this.resolve(this.sessionUriForChat(chat));
+    const hydraId = this.resolveChat(chat);
     return hydraId ? this.fileSessions().find((session) => session.id === hydraId) : undefined;
   }
 
   uriInUse(uri: string): boolean {
-    return this.pendingCreations.has(uri) || this.uriToId.has(uri) || this.published.has(uri);
+    return this.pendingCreations.has(uri) || this.groups.has(uri) || this.published.has(uri);
+  }
+
+  chatInUse(chat: string): boolean {
+    return this.pendingChats.has(chat) || this.chatToId.has(chat);
   }
 
   async poll(): Promise<void> {
@@ -255,13 +279,9 @@ export class Catalog {
   private drop(id: string): void {
     this.entries.delete(id);
     this.options.flags?.forget(id);
-    const uri = this.stamps.get(id);
     this.stamps.delete(id);
+    this.chatStamps.delete(id);
     this.lookedUp.delete(id);
-    if (uri) {
-      this.uriToId.delete(uri);
-      this.keyToUri.delete(sessionKey(uri));
-    }
   }
 
   private async lookUpStamps(): Promise<void> {
@@ -277,8 +297,10 @@ export class Catalog {
           const value = await this.extState.get<string>(id, AHP_URI_KEY);
           if (typeof value === "string" && !this.stamps.has(id)) {
             this.stamps.set(id, value);
-            this.uriToId.set(value, id);
-            this.keyToUri.set(sessionKey(value), value);
+            const chat = await this.extState.get<{ chat?: unknown; at?: unknown }>(id, AHP_CHAT_KEY);
+            if (chat && typeof chat.chat === "string") {
+              this.chatStamps.set(id, { chat: chat.chat, at: typeof chat.at === "number" ? chat.at : 0 });
+            }
           }
           this.lookedUp.add(id);
         } catch (err) {
@@ -307,17 +329,39 @@ export class Catalog {
     );
   }
 
+  private addedAt(hydraId: string): number {
+    return this.chatStamps.get(hydraId)?.at ?? 0;
+  }
+
+  private rebuildIndex(): void {
+    this.groups.clear();
+    this.chatToId.clear();
+    const listed = [...this.entries.values()]
+      .filter((entry) => this.isListed(entry.sessionId))
+      .sort((a, b) => this.addedAt(a.sessionId) - this.addedAt(b.sessionId) || a.sessionId.localeCompare(b.sessionId));
+    for (const entry of listed) {
+      const uri = this.groupOf(entry.sessionId);
+      const members = this.groups.get(uri);
+      if (members) {
+        members.push(entry.sessionId);
+      } else {
+        this.groups.set(uri, [entry.sessionId]);
+      }
+      this.chatToId.set(this.chatOf(entry.sessionId), entry.sessionId);
+    }
+  }
+
   // Diffs the listed set against what clients were last told and emits the root notifications.
   private reconcile(): void {
+    this.rebuildIndex();
     const next = new Map<string, SessionSummary>();
-    const owners = new Map<string, string>();
-    for (const [id, entry] of this.entries) {
-      if (!this.isListed(id)) {
-        continue;
-      }
-      const uri = this.uriFor(id);
-      next.set(uri, entryToSummary(entry, uri, this.flagsFor(id)));
-      owners.set(uri, id);
+    for (const [uri, ids] of this.groups) {
+      const members: GroupMember[] = ids.map((id) => ({
+        entry: this.entries.get(id) as HydraSessionEntry,
+        chat: this.chatOf(id),
+        flags: this.flagsFor(id),
+      }));
+      next.set(uri, groupToSummary(members, uri));
     }
     for (const uri of this.pendingCreations) {
       const held = this.published.get(uri);
@@ -352,7 +396,7 @@ export class Catalog {
       if (announce) {
         this.core.notify(ROOT_URI, "root/sessionRemoved", { channel: ROOT_URI, session: uri });
       }
-      this.forgetChannels(uri);
+      this.forgetChannels(uri, previous.get(uri));
     }
     this.syncRoot();
     for (const listener of this.changeListeners) {
@@ -360,8 +404,11 @@ export class Catalog {
     }
   }
 
-  private forgetChannels(uri: string): void {
+  private forgetChannels(uri: string, summary: SessionSummary | undefined): void {
     this.core.removeChannel(uri);
+    for (const chat of summary?.chats ?? []) {
+      this.core.removeChannel(chat.resource);
+    }
     this.core.removeChannel(chatUri(sessionKey(uri)));
   }
 
@@ -406,25 +453,42 @@ export class Catalog {
   // Registers a session this extension is creating so the first poll cannot hide or duplicate it.
   beginCreation(uri: string, summary: SessionSummary): void {
     this.pendingCreations.add(uri);
-    this.keyToUri.set(sessionKey(uri), uri);
+    this.pendingChats.set(chatUri(sessionKey(uri)), uri);
     this.published.set(uri, summary);
     this.core.notify(ROOT_URI, "root/sessionAdded", { channel: ROOT_URI, summary });
   }
 
   failCreation(uri: string): void {
     this.pendingCreations.delete(uri);
-    this.keyToUri.delete(sessionKey(uri));
+    this.pendingChats.delete(chatUri(sessionKey(uri)));
     this.published.delete(uri);
     this.core.notify(ROOT_URI, "root/sessionRemoved", { channel: ROOT_URI, session: uri });
   }
 
   claim(hydraId: string, uri: string, entry: HydraSessionEntry): void {
     this.stamps.set(hydraId, uri);
-    this.uriToId.set(uri, hydraId);
-    this.keyToUri.set(sessionKey(uri), uri);
     this.lookedUp.add(hydraId);
     this.entries.set(hydraId, entry);
     this.pendingCreations.delete(uri);
+    this.pendingChats.delete(chatUri(sessionKey(uri)));
+    this.reconcile();
+  }
+
+  beginChatCreation(chat: string, sessionUri: string): void {
+    this.pendingChats.set(chat, sessionUri);
+  }
+
+  failChatCreation(chat: string): void {
+    this.pendingChats.delete(chat);
+  }
+
+  // Adds a Hydra session to an existing AHP session as one more chat.
+  claimChat(hydraId: string, sessionUri: string, chat: string, at: number, entry: HydraSessionEntry): void {
+    this.stamps.set(hydraId, sessionUri);
+    this.chatStamps.set(hydraId, { chat, at });
+    this.lookedUp.add(hydraId);
+    this.entries.set(hydraId, entry);
+    this.pendingChats.delete(chat);
     this.reconcile();
   }
 
@@ -440,6 +504,7 @@ function toAgentInfo(agent: HydraAgent): AgentInfo {
     displayName: agent.name || agent.id,
     description: agent.description ?? "",
     models: [],
+    capabilities: { multipleChats: { fork: true } },
   };
 }
 

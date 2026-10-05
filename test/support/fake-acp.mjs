@@ -22,6 +22,8 @@ let cancelHang;
 
 // --steering advertises native _session/steering, as claude-agent-acp and codex-acp do.
 const nativeSteering = process.argv.includes("--steering");
+// --models advertises two models and records session/set_model calls.
+const withModels = process.argv.includes("--models");
 // What this agent process saw, in order; a script:log prompt reads it back.
 const log = [];
 // The running script:wait turn, if any: a steer or cancel settles it.
@@ -289,7 +291,19 @@ rl.on("line", (line) => {
       },
     });
   } else if (message.method === "session/new") {
-    send({ jsonrpc: "2.0", id: message.id, result: { sessionId: `fake-${process.pid}-${++counter}` } });
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        sessionId: `fake-${process.pid}-${++counter}`,
+        ...(withModels
+          ? { models: { currentModelId: "m1", availableModels: [{ modelId: "m1", name: "Model One" }, { modelId: "m2", name: "Model Two" }] } }
+          : {}),
+      },
+    });
+  } else if (message.method === "session/set_model") {
+    log.push(`model:${message.params?.modelId}`);
+    send({ jsonrpc: "2.0", id: message.id, result: {} });
   } else if (message.method === "session/prompt") {
     void prompt(message);
   } else if (message.id !== undefined) {

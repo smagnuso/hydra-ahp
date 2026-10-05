@@ -9,14 +9,15 @@ import type { ActionDecision, ActionRequest, Backend, ClientContext } from "../p
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { FileService } from "../files/service.js";
-import type { HydraRest } from "../hydra/rest.js";
+import type { HydraRest, HydraSessionEntry } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
-import { AHP_URI_KEY, type Catalog } from "./catalog.js";
-import { chatUri, cwdToUri, isChatUri, isSessionUri, sessionKey, uriToCwd } from "./ids.js";
+import { AHP_CHAT_KEY, AHP_URI_KEY, type Catalog } from "./catalog.js";
+import { chatKey, chatUri, cwdToUri, isChatUri, isSessionUri, sessionKey, uriToCwd } from "./ids.js";
 import { emptyChat } from "./replay.js";
 import { SessionBridge } from "./session-bridge.js";
 import { STATUS_IDLE, UNTITLED, entryToSummary, summaryToSessionState } from "./summary.js";
+import { randomUUID } from "node:crypto";
 
 const log = logger("backend");
 
@@ -26,6 +27,7 @@ const SESSION_EXISTS = -32003;
 
 const FAILED_CHANNEL_LINGER_MS = 30_000;
 const MAX_IDLE_BRIDGES = 16;
+const INITIAL_WAIT_MS = 10_000;
 
 const action = (value: Record<string, unknown>) => value as never;
 
@@ -78,10 +80,9 @@ export class HydraBackend implements Backend {
     await Promise.all(bridges.map((bridge) => bridge.dispose().catch(() => undefined)));
   }
 
-  // The bridge for a session or chat channel, once the session exists in Hydra.
+  // The bridge for a session or chat channel, once the session exists in Hydra. A session channel is served by its default chat's bridge.
   bridgeFor(channel: string): SessionBridge | undefined {
-    const session = isChatUri(channel) ? this.catalog.sessionUriForChat(channel) : channel;
-    const hydraId = this.catalog.resolve(session);
+    const hydraId = isChatUri(channel) ? this.catalog.resolveChat(channel) : this.catalog.resolve(channel);
     if (!hydraId) {
       return undefined;
     }
@@ -89,8 +90,8 @@ export class HydraBackend implements Backend {
     if (!bridge) {
       bridge = new SessionBridge({
         hydraId,
-        sessionUri: session,
-        chatUri: chatUri(sessionKey(session)),
+        sessionUri: this.catalog.groupOf(hydraId),
+        chatUri: this.catalog.chatOf(hydraId),
         core: this.core,
         catalog: this.catalog,
         rest: this.rest,
@@ -111,6 +112,49 @@ export class HydraBackend implements Backend {
       bridge.onCatalogChange();
     }
     this.syncTitles();
+    this.syncChats();
+  }
+
+  // Keeps each open session channel's chat list in step with its members: chats added, removed or promoted to default.
+  private syncChats(): void {
+    for (const uri of this.core.store.uris()) {
+      if (!isSessionUri(uri)) {
+        continue;
+      }
+      const summary = this.catalog.summaryFor(uri);
+      const state = this.core.store.state(uri) as SessionState | undefined;
+      if (!summary || !state) {
+        continue;
+      }
+      const wanted = summary.chats ?? [];
+      const held = new Set(state.chats.map((chat) => chat.resource));
+      const keep = new Set(wanted.map((chat) => chat.resource));
+      for (const chat of wanted) {
+        if (!held.has(chat.resource)) {
+          this.core.publish(
+            uri,
+            action({
+              type: "session/chatAdded",
+              summary: {
+                resource: chat.resource,
+                title: chat.title,
+                status: chat.status ?? STATUS_IDLE,
+                modifiedAt: (chat as { modifiedAt?: string }).modifiedAt ?? summary.modifiedAt,
+              },
+            }),
+          );
+        }
+      }
+      for (const chat of held) {
+        if (!keep.has(chat)) {
+          this.core.publish(uri, action({ type: "session/chatRemoved", chat }));
+          this.core.removeChannel(chat);
+        }
+      }
+      if (summary.defaultChat !== undefined && state.defaultChat !== summary.defaultChat) {
+        this.core.publish(uri, action({ type: "session/defaultChatChanged", defaultChat: summary.defaultChat }));
+      }
+    }
   }
 
   private syncTitles(): void {
@@ -146,8 +190,9 @@ export class HydraBackend implements Backend {
 
   // A session channel is a view of the catalog row; the chat channel is built by the bridge from Hydra's history.
   async attach(uri: string): Promise<void> {
+    await this.creating.get(uri);
     if (isChatUri(uri)) {
-      if (this.core.store.has(uri) && !this.catalog.resolve(this.catalog.sessionUriForChat(uri))) {
+      if (this.core.store.has(uri) && !this.catalog.resolveChat(uri)) {
         return;
       }
       await this.bridgeFor(uri)?.attach();
@@ -177,8 +222,8 @@ export class HydraBackend implements Backend {
       return { accept: false, reason: "this host does not accept that action" };
     }
     // Clients may act on a session they just created before it is ready; hold the action until it is.
-    const session = isChatUri(channel) ? this.catalog.sessionUriForChat(channel) : channel;
-    await this.creating.get(session);
+    await this.creating.get(channel);
+    await this.creating.get(isChatUri(channel) ? this.catalog.sessionUriForChat(channel) : channel);
     const bridge = this.bridgeFor(channel);
     if (!bridge) {
       return { accept: false, reason: "the session is not ready yet" };
@@ -196,6 +241,10 @@ export class HydraBackend implements Backend {
         return this.createSession(body);
       case "disposeSession":
         return this.disposeSession(body);
+      case "createChat":
+        return this.createChat(body);
+      case "disposeChat":
+        return this.disposeChat(body);
       case "fetchTurns":
         return this.fetchTurns(body);
       default:
@@ -296,13 +345,7 @@ export class HydraBackend implements Backend {
     }
   }
 
-  // Same as deleting from Hydra: the agent stops for every attached client and a tombstone remains.
-  private async disposeSession(params: Record<string, unknown>): Promise<null> {
-    const channel = params.channel;
-    const hydraId = typeof channel === "string" ? this.catalog.resolve(channel) : undefined;
-    if (!hydraId) {
-      throw new RpcError(SESSION_NOT_FOUND, "Session not found");
-    }
+  private async deleteHydraSession(hydraId: string): Promise<void> {
     try {
       await this.sessions.delete(hydraId);
     } catch (err) {
@@ -312,6 +355,126 @@ export class HydraBackend implements Backend {
       throw new RpcError(ErrorCodes.InternalError, `Hydra could not delete the session: ${message(err)}`);
     }
     this.catalog.remove(hydraId);
+  }
+
+  // Same as deleting from Hydra: the agent stops for every attached client and a tombstone remains. Every chat of the session goes.
+  private async disposeSession(params: Record<string, unknown>): Promise<null> {
+    const channel = params.channel;
+    const members = typeof channel === "string" ? this.catalog.membersOf(channel) : [];
+    if (members.length === 0) {
+      throw new RpcError(SESSION_NOT_FOUND, "Session not found");
+    }
+    for (const hydraId of [...members].reverse()) {
+      await this.deleteHydraSession(hydraId);
+    }
     return null;
+  }
+
+  // Deleting a session's last chat deletes the session.
+  private async disposeChat(params: Record<string, unknown>): Promise<null> {
+    const channel = params.channel;
+    const hydraId = typeof channel === "string" ? this.catalog.resolveChat(channel) : undefined;
+    if (!hydraId) {
+      throw new RpcError(SESSION_NOT_FOUND, "Chat not found");
+    }
+    const session = this.catalog.groupOf(hydraId);
+    if (this.catalog.membersOf(session).length <= 1) {
+      return this.disposeSession({ channel: session });
+    }
+    await this.deleteHydraSession(hydraId);
+    return null;
+  }
+
+  // One more chat in an existing session is one more Hydra session stamped with the same AHP session URI.
+  private async createChat(params: Record<string, unknown>): Promise<null> {
+    const session = params.channel;
+    const chat = params.chat;
+    if (typeof session !== "string" || !isSessionUri(session)) {
+      throw new RpcError(ErrorCodes.InvalidParams, "channel must be a session URI");
+    }
+    if (typeof chat !== "string" || !isChatUri(chat) || chatKey(chat) === "") {
+      throw new RpcError(ErrorCodes.InvalidParams, "chat must be an ahp-chat: URI");
+    }
+    const leadId = this.catalog.resolve(session);
+    const lead = leadId ? this.catalog.entry(leadId) : undefined;
+    if (!leadId || !lead) {
+      throw new RpcError(SESSION_NOT_FOUND, "Session not found");
+    }
+    if (lead.remote !== undefined || leadId.includes(":")) {
+      throw new RpcError(ErrorCodes.InvalidParams, "chats cannot be added to a session on a federated remote");
+    }
+    if (this.catalog.chatInUse(chat) || this.core.store.has(chat)) {
+      throw new RpcError(SESSION_EXISTS, "Chat already exists");
+    }
+    const source = params.source as { kind?: unknown; chat?: unknown; turnId?: unknown } | undefined;
+    let forkFrom: { hydraId: string; at: string | undefined } | undefined;
+    if (source !== undefined) {
+      if (source.kind !== "fork") {
+        throw new RpcError(ErrorCodes.InvalidParams, "only fork sources are supported");
+      }
+      const sourceId = typeof source.chat === "string" ? this.catalog.resolveChat(source.chat) : undefined;
+      if (!sourceId || this.catalog.groupOf(sourceId) !== session) {
+        throw new RpcError(ErrorCodes.InvalidParams, "the source chat must belong to this session");
+      }
+      const turnId = typeof source.turnId === "string" ? source.turnId : undefined;
+      forkFrom = { hydraId: sourceId, at: turnId === undefined ? undefined : (this.bridgeFor(source.chat as string)?.messageIdFor(turnId) ?? turnId) };
+    }
+    const initial = params.initialMessage;
+    this.catalog.beginChatCreation(chat, session);
+    const finishing = this.finishChat(session, chat, lead, forkFrom);
+    this.creating.set(chat, finishing);
+    try {
+      await finishing;
+    } finally {
+      this.creating.delete(chat);
+    }
+    if (initial !== undefined && initial !== null) {
+      void this.runInitial(chat, initial as Record<string, unknown>);
+    }
+    return null;
+  }
+
+  private async finishChat(
+    session: string,
+    chat: string,
+    lead: HydraSessionEntry,
+    forkFrom: { hydraId: string; at: string | undefined } | undefined,
+  ): Promise<void> {
+    let hydraId: string | undefined;
+    try {
+      const created = forkFrom
+        ? await this.rest.forkSession(forkFrom.hydraId, { mode: "verbatim", ...(forkFrom.at ? { forkAt: forkFrom.at } : {}) })
+        : await this.rest.createSession({
+            ...(lead.agentId ? { agentId: lead.agentId } : {}),
+            ...(lead.cwd ? { cwd: lead.cwd } : {}),
+          });
+      hydraId = created.sessionId;
+      await this.extState.set(hydraId, AHP_URI_KEY, session);
+      const at = Date.now();
+      await this.extState.set(hydraId, AHP_CHAT_KEY, { chat, at });
+      const entry = await this.rest.getSession(hydraId);
+      this.catalog.claimChat(hydraId, session, chat, at, entry);
+    } catch (err) {
+      log.warn(`createChat ${chat} failed`, message(err));
+      if (hydraId) {
+        await this.rest.deleteSession(hydraId).catch(() => undefined);
+      }
+      this.catalog.failChatCreation(chat);
+      throw new RpcError(ErrorCodes.InternalError, `Hydra could not create the chat: ${message(err)}`);
+    }
+  }
+
+  // The first message of a new chat becomes its first turn once a client has the chat open.
+  private async runInitial(chat: string, first: Record<string, unknown>): Promise<void> {
+    for (let waited = 0; waited < INITIAL_WAIT_MS && !this.core.hasSubscribers(chat); waited += 50) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (!this.core.hasSubscribers(chat)) {
+      log.warn(`initial message for ${chat} dropped: no client opened the chat`);
+      return;
+    }
+    await this.bridgeFor(chat)?.startInitial(randomUUID(), first).catch((err) => {
+      log.warn(`initial message for ${chat} failed`, message(err));
+    });
   }
 }

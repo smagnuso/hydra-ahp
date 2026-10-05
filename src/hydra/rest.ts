@@ -128,6 +128,10 @@ export class HydraRest {
     return this.request("POST", "/v1/sessions", body);
   }
 
+  forkSession(id: string, body: { forkAt?: string; mode?: "verbatim" | "synthesis" } = {}): Promise<{ sessionId: string }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(id)}/fork`, body);
+  }
+
   deleteSession(id: string): Promise<void> {
     return this.request("DELETE", `/v1/sessions/${encodeURIComponent(id)}`);
   }

@@ -110,6 +110,7 @@ export class ScratchDaemon {
         agents: {
           fake: { command: "node", args: [FAKE_AGENT] },
           "fake-steering": { command: "node", args: [FAKE_AGENT, "--steering"] },
+          "fake-models": { command: "node", args: [FAKE_AGENT, "--models"] },
         },
         extensions,
       }),
