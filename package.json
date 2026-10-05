@@ -47,9 +47,11 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "@microsoft/agent-host-protocol": "^1.0.0",
     "@types/node": "^22.10.0",
     "tsup": "^8.5.1",
     "typescript": "^5.6.3",
-    "vitest": "^2.0.0"
+    "vitest": "^2.0.0",
+    "ws": "^8.22.0"
   }
 }
