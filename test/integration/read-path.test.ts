@@ -128,9 +128,8 @@ describe("read path against a scratch daemon", () => {
       await ahp.session.client.unsubscribe(uri);
       return status.status ?? 0;
     };
-    const before = await statusNow();
-    // Fails on CI runners only: Hydra can count the first turn's tail as a turn the agent started itself.
-    expect(before & 8, daemon.logLines(id)).toBe(0);
+    // Activity comes from the catalog's last poll, which can predate the end of the first prompt by a poll interval.
+    await until("session reads as idle after its first prompt", async () => (((await statusNow()) & 8) === 0 ? true : undefined));
     const turn = driver.prompt(id, "script:slow");
     await until("session reads as running", async () => (((await statusNow()) & 8) === 8 ? true : undefined));
     await turn;
