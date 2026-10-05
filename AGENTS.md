@@ -11,16 +11,17 @@ Hydra's other clients. The main target is VS Code's agent UI; the official
 AHP SDK clients are secondary.
 
 The repo and bin are named `hydra-ahp`, deliberately not `hydra-acp-ahp`
-(which reads like a typo). The Hydra extension name is `ahp`, so slash
-commands are `/hydra ahp <verb>`.
+(which reads like a typo). It registers with Hydra as `hydra-ahp`, and Hydra
+elides the `hydra-` prefix, so slash commands are `/hydra ahp <verb>`.
 
 The design lives in `plan-ahp-extension.md` one directory up
 (`~/dev/hydra-acp/`). Its Decisions table (D1 to D11) is settled.
 
 Scope for v1: an AHP session is a group of Hydra sessions, each one a chat;
 a session nobody added chats to is a group of one. Hydra sessions share an AHP
-session when `extension_state` stamps them with the same `ahpUri`. No
-terminals, changesets, automations, customizations or non-loopback access.
+session when `extension_state` stamps them with the same `ahpUri`. Terminals
+are served to `full` tokens only. No changesets, automations, customizations
+or non-loopback access.
 
 ## How it fits into Hydra
 
@@ -49,8 +50,10 @@ is a Hydra client downstream: `/acp` with the per-process extension token in
 - `src/files/`: `resource*` commands and `@` completions, gated by token level
 - `src/hydra/`: `/acp` client, REST client, `extension_state`, version check
 - `src/store/`: token registry (`tokens.json`), read/archive flags
-  (`flags.json`) and per-agent model lists (`models.json`), all 0600 under
-  `<hydra home>/extensions/ahp/`
+  (`flags.json`), per-agent model lists (`models.json`) and config option
+  sets (`configs.json`), all 0600 under `<hydra home>/extensions/ahp/`
+- `src/terminals/`: `createTerminal` and terminal channels over node-pty
+  (optional dependency)
 - `src/commands/`: the `/hydra ahp token ...` verbs
 - `scripts/record-host.mjs`: frame-logging stub host for recon
 - `test/`: unit tests plus `test/integration/` against scratch daemons
@@ -64,8 +67,8 @@ npm test          # vitest
 npm run lint      # tsc --noEmit
 ```
 
-Ships as `hydra-ahp` on PATH. Registered with Hydra under the name `ahp`
-with command `hydra-ahp`.
+Ships as `hydra-ahp` on PATH. Registered with Hydra as `hydra-ahp`; Hydra
+elides the `hydra-` prefix, so slash commands are `/hydra ahp <verb>`.
 
 ## Conventions
 
@@ -109,9 +112,30 @@ with command `hydra-ahp`.
 - **Daemon restart**: the extension exits on losing Hydra and the new daemon
   relaunches it; the wall-clock `serverSeq` base forces snapshots over
   replay. There is no in-process reconnect.
-- **Token levels gate `resource*`**: `scoped` (default), `read`, `full`;
-  `createResourceWatch` is `-32601` at every level. The `ahp` extension
-  name, not `hydra-ahp`, gives `/hydra ahp token ...`.
+- **Token levels gate `resource*` and terminals**: `full` (default),
+  `read`, `scoped`. Levels are not a security boundary against a hostile
+  client: any token can prompt an agent and approve its permission requests.
+  They only limit direct access; `createResourceWatch` is `-32601` at every level and
+  `createTerminal` is `-32601` below `full`. Orphaned terminals die after a
+  30 s grace.
+- **VS Code session URIs must use the agent id as scheme**
+  (`<agent>:/<hydraId>`): VS Code picks the content provider by scheme, and
+  any other scheme ("No harness descriptor found") gives empty transcripts.
+  `providerSessionUri` falls back to `ahp-session:/` only for ids that are
+  not valid schemes. Switching agent moves the session to a new URI.
+- **VS Code derives the default chat URI** as
+  `ahp-chat://default/<base64url(sessionUri)>` and never asks for it; the
+  catalog must use exactly that (`defaultChatUri`).
+- **Session config schema cannot change live**: `session/configChanged`
+  merges values only, so the schema is fixed when the session channel is
+  built (after attach, from live `configOptions` or the per-agent cache).
+  Properties are `acp.<optionId>`; `model` is excluded (own picker), Hydra's
+  `agent` option is included.
+- **New permission requests are held** (`HYDRA_AHP_PERMISSION_DELAY_MS`,
+  default 500 ms) so one an auto-approver answers is never shown.
+- **Hydra snapshots extension config at boot**: changing an extension's
+  `env` needs `extension remove` + `add --env` then `start` (or a daemon
+  restart); `extension restart` keeps the old env.
 
 ## Updating this file
 
