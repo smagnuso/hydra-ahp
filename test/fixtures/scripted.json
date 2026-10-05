@@ -1,0 +1,1960 @@
+{
+ "live": [
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "available_commands_update",
+    "availableCommands": [
+     {
+      "name": "hydra",
+      "description": "Hydra session command (kill, restart, title, agent <agent>)"
+     },
+     {
+      "name": "model",
+      "description": "Switch model; omit arg to list available models"
+     },
+     {
+      "name": "mode",
+      "description": "Switch mode; omit arg to list available modes"
+     },
+     {
+      "name": "sessions",
+      "description": "List all sessions"
+     },
+     {
+      "name": "help",
+      "description": "Show available commands"
+     },
+     {
+      "name": "title",
+      "description": "Alias for '/hydra title': Regenerate the session title + synopsis via the agent (or set title manually with an arg)"
+     },
+     {
+      "name": "agent <agent | status>",
+      "description": "Alias for '/hydra agent': Schedule a swap to a different agent (synthesizes a brief in the target's idiom, rotates on idle); `status` reports any pending swap"
+     },
+     {
+      "name": "workspace <start [name] [--clean] | sync | merge | apply | stop | detach | clean [--deep] | discard | status>",
+      "description": "Alias for '/hydra workspace': Move this session into an isolated workspace so its edits cannot collide with other work, then land or discard them. `start` copies your uncommitted changes in and leaves the real tree untouched; `start --clean` leaves them behind so the workspace begins at the last commit. `stop` merges and returns; `discard` throws the work away and returns; `detach` returns without merging, leaving the workspace and its branch intact; `merge` lands the work without leaving; `apply` also stays, but delivers the work as ONE staged, uncommitted changeset instead of as the agent's commits, so you review and commit it yourself, with no fast-forward needed, which is what makes it work once the source has moved on; `clean` throws away everything done in the workspace and stays there, putting it back exactly as `start --clean` would have made it (add `--deep` to rebuild dependencies and carried config files too, rather than keeping them); `sync` pulls the source's committed history INTO the workspace, so you can test against what you will land onto, and because landing is fast-forward-only, syncing is also how you recover once the source has moved on. `start <name>` naming a workspace another live session is already in JOINS it instead of making a second one, so two sessions can share a checkout deliberately: edits interleave, `stop` behaves as `detach` while anyone else is still there, and the work lands when the last of them leaves."
+     },
+     {
+      "name": "kill",
+      "description": "Alias for '/hydra kill': Close this session (kills the agent; record is kept so it can be resumed later)"
+     },
+     {
+      "name": "restart",
+      "description": "Alias for '/hydra restart': Restart the agent with a fresh session/new while preserving conversation history (useful when the proxy has changed available models)"
+     },
+     {
+      "name": "compact",
+      "description": "Alias for '/hydra compact': Compact this session's history. Use '/hydra compact status' to inspect current compaction state without triggering."
+     },
+     {
+      "name": "uncompact",
+      "description": "Alias for '/hydra uncompact': Roll back the most recent compaction swap (only available immediately after a swap, before any new turns)"
+     },
+     {
+      "name": "fork [--verbatim] [prompt]",
+      "description": "Alias for '/hydra fork': Fork this conversation into a new session (default: synthesis mode with a synopsis brief; pass --verbatim to slice at the last completed turn instead). A prompt is sent to the fork as its first turn once it's ready."
+     },
+     {
+      "name": "config [<id> [<value>]]",
+      "description": "Alias for '/hydra config': List or set an agent-advertised configOption (model, mode, effort, etc.). With no args, lists all options; with <id>, shows its choices; with <id> <value>, applies it."
+     }
+    ]
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272642
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "session_info_update",
+    "title": "script:tools",
+    "updatedAt": "2026-10-05T04:07:52.643Z"
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "prompt_received",
+    "messageId": "m_bucTWAOQZ2LHkb9z",
+    "prompt": [
+     {
+      "type": "text",
+      "text": "script:tools"
+     }
+    ],
+    "sentBy": {
+     "clientId": "cli_kV4zp02o",
+     "name": "scratch-test"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272644,
+     "seq": 1791173272644
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "user_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "script:tools"
+    },
+    "_meta": {
+     "hydra-acp": {
+      "compatFor": "prompt_received"
+     }
+    },
+    "messageId": "m_EXee0Z89Fd8cMBuJ"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272644,
+     "seq": 1791173272645
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+     "type": "text",
+     "text": "Let me look."
+    },
+    "messageId": "m_wkwuOucjOMGWUGz1"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272646
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "\n"
+    },
+    "messageId": "m_fnAU8fF7XCZrKD7Z"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272647
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "t1",
+    "title": "Run ls",
+    "kind": "execute",
+    "status": "pending",
+    "rawInput": {},
+    "_meta": {
+     "claudeCode": {
+      "toolName": "Bash"
+     }
+    },
+    "messageId": "m_O62mkJUvjL350gFa"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272648
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "t1",
+    "status": "in_progress",
+    "rawInput": {
+     "command": "ls"
+    },
+    "messageId": "m_xKQnedq4ZBorapmZ"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272649
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "t1",
+    "status": "completed",
+    "content": [
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "a.txt\nb.txt"
+      }
+     }
+    ],
+    "messageId": "m_9rdtqd87x6yCgUO2"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272650
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "Two files."
+    },
+    "messageId": "m_8IAkZjqECvcSvlI1"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272651
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": " Now an edit."
+    },
+    "messageId": "m_bIejSxCkiciSVmxg"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272652
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "plan",
+    "entries": [
+     {
+      "content": "edit it",
+      "priority": "medium",
+      "status": "pending"
+     }
+    ],
+    "messageId": "m_wCXNDvv8DDzEz9EL"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272653
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "t2",
+    "title": "Edit a.txt",
+    "kind": "edit",
+    "status": "in_progress",
+    "rawInput": {
+     "path": "/tmp/a.txt"
+    },
+    "content": [
+     {
+      "type": "diff",
+      "path": "/tmp/a.txt",
+      "oldText": "one",
+      "newText": "two"
+     }
+    ],
+    "messageId": "m_e5x8NvvvyZ2PSkJj"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272654
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "t2",
+    "status": "completed",
+    "messageId": "m_8dODxHTo7fQWOiew"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272655
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "orphan",
+    "title": "Late",
+    "status": "completed",
+    "messageId": "m_g9BaX5pWKqgDB5rE"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272656
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "plan",
+    "entries": [
+     {
+      "content": "edit it",
+      "priority": "medium",
+      "status": "completed"
+     }
+    ],
+    "messageId": "m_tqJ6proniUvDfdR4"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272657
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "usage_update",
+    "used": 1200,
+    "size": 200000,
+    "cost": {
+     "amount": 0.01,
+     "currency": "USD"
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "All done."
+    },
+    "messageId": "m_xa3PTAJpkw8onaxl"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272647,
+     "seq": 1791173272658
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "turn_complete",
+    "messageId": "m_hvRlMemrWD7WEFVw",
+    "stopReason": "end_turn"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272647,
+     "seq": 1791173272659
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "prompt_received",
+    "messageId": "m_T6lJhlETkzT3D2tN",
+    "prompt": [
+     {
+      "type": "text",
+      "text": "ping"
+     }
+    ],
+    "sentBy": {
+     "clientId": "cli_kV4zp02o",
+     "name": "scratch-test"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272647,
+     "seq": 1791173272660
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "user_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "ping"
+    },
+    "_meta": {
+     "hydra-acp": {
+      "compatFor": "prompt_received"
+     }
+    },
+    "messageId": "m_gx6Ow5C7m8Qc7GRT"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272647,
+     "seq": 1791173272661
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "pong"
+    },
+    "messageId": "m_zomiam5rOS6g9jaC"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272662
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "turn_complete",
+    "messageId": "m_VdN9WdcljxWcPfpg",
+    "stopReason": "end_turn"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272663
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "prompt_received",
+    "messageId": "m_OanKmZUPg6EZ85pR",
+    "prompt": [
+     {
+      "type": "text",
+      "text": "script:refuse"
+     }
+    ],
+    "sentBy": {
+     "clientId": "cli_kV4zp02o",
+     "name": "scratch-test"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272664
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "user_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "script:refuse"
+    },
+    "_meta": {
+     "hydra-acp": {
+      "compatFor": "prompt_received"
+     }
+    },
+    "messageId": "m_QLtSyrdpXE28qogs"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272665
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "no"
+    },
+    "messageId": "m_6O3tm4S2642gX4XV"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272666
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "turn_complete",
+    "messageId": "m_dA5H4eaeIb3frVQv",
+    "stopReason": "refusal"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272649,
+     "seq": 1791173272667
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "prompt_received",
+    "messageId": "m_UAJgWVbBhb0ce5Z8",
+    "prompt": [
+     {
+      "type": "text",
+      "text": "script:hang"
+     }
+    ],
+    "sentBy": {
+     "clientId": "cli_kV4zp02o",
+     "name": "scratch-test"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272649,
+     "seq": 1791173272668
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "user_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "script:hang"
+    },
+    "_meta": {
+     "hydra-acp": {
+      "compatFor": "prompt_received"
+     }
+    },
+    "messageId": "m_0J19qbubNtiCc2gB"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272649,
+     "seq": 1791173272669
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "h1",
+    "title": "Wait",
+    "kind": "other",
+    "status": "in_progress",
+    "messageId": "m_rY82jic7q9w2gYzS"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272649,
+     "seq": 1791173272670
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "h1",
+    "status": "failed",
+    "_meta": {
+     "hydra-acp": {
+      "synthetic": true,
+      "closedBy": "cancelled"
+     }
+    },
+    "messageId": "m_nSaH7B6yRLmJq8p7"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173273150,
+     "seq": 1791173273150
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "turn_complete",
+    "messageId": "m_uJokcLavAh0K2IPP",
+    "stopReason": "cancelled"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173273151,
+     "seq": 1791173273151
+    }
+   }
+  }
+ ],
+ "history": [
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "prompt_received",
+     "messageId": "m_bucTWAOQZ2LHkb9z",
+     "prompt": [
+      {
+       "type": "text",
+       "text": "script:tools"
+      }
+     ],
+     "sentBy": {
+      "clientId": "cli_kV4zp02o",
+      "name": "scratch-test"
+     }
+    }
+   },
+   "recordedAt": 1791173272644,
+   "seq": 1791173272644
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "user_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "script:tools"
+     },
+     "_meta": {
+      "hydra-acp": {
+       "compatFor": "prompt_received"
+      }
+     },
+     "messageId": "m_EXee0Z89Fd8cMBuJ"
+    }
+   },
+   "recordedAt": 1791173272644,
+   "seq": 1791173272645
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "agent_thought_chunk",
+     "content": {
+      "type": "text",
+      "text": "Let me look."
+     },
+     "messageId": "m_wkwuOucjOMGWUGz1"
+    }
+   },
+   "recordedAt": 1791173272645,
+   "seq": 1791173272646
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "agent_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "\n"
+     },
+     "messageId": "m_fnAU8fF7XCZrKD7Z"
+    }
+   },
+   "recordedAt": 1791173272645,
+   "seq": 1791173272647
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "tool_call",
+     "toolCallId": "t1",
+     "title": "Run ls",
+     "kind": "execute",
+     "status": "pending",
+     "rawInput": {},
+     "_meta": {
+      "claudeCode": {
+       "toolName": "Bash"
+      }
+     },
+     "messageId": "m_O62mkJUvjL350gFa"
+    }
+   },
+   "recordedAt": 1791173272645,
+   "seq": 1791173272648
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "tool_call_update",
+     "toolCallId": "t1",
+     "status": "in_progress",
+     "rawInput": {
+      "command": "ls"
+     },
+     "messageId": "m_xKQnedq4ZBorapmZ"
+    }
+   },
+   "recordedAt": 1791173272645,
+   "seq": 1791173272649
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "tool_call_update",
+     "toolCallId": "t1",
+     "status": "completed",
+     "content": [
+      {
+       "type": "content",
+       "content": {
+        "type": "text",
+        "text": "a.txt\nb.txt"
+       }
+      }
+     ],
+     "messageId": "m_9rdtqd87x6yCgUO2"
+    }
+   },
+   "recordedAt": 1791173272645,
+   "seq": 1791173272650
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "agent_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "Two files."
+     },
+     "messageId": "m_8IAkZjqECvcSvlI1"
+    }
+   },
+   "recordedAt": 1791173272646,
+   "seq": 1791173272651
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "agent_message_chunk",
+     "content": {
+      "type": "text",
+      "text": " Now an edit."
+     },
+     "messageId": "m_bIejSxCkiciSVmxg"
+    }
+   },
+   "recordedAt": 1791173272646,
+   "seq": 1791173272652
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "plan",
+     "entries": [
+      {
+       "content": "edit it",
+       "priority": "medium",
+       "status": "pending"
+      }
+     ],
+     "messageId": "m_wCXNDvv8DDzEz9EL"
+    }
+   },
+   "recordedAt": 1791173272646,
+   "seq": 1791173272653
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "tool_call",
+     "toolCallId": "t2",
+     "title": "Edit a.txt",
+     "kind": "edit",
+     "status": "in_progress",
+     "rawInput": {
+      "path": "/tmp/a.txt"
+     },
+     "content": [
+      {
+       "type": "diff",
+       "path": "/tmp/a.txt",
+       "oldText": "one",
+       "newText": "two"
+      }
+     ],
+     "messageId": "m_e5x8NvvvyZ2PSkJj"
+    }
+   },
+   "recordedAt": 1791173272646,
+   "seq": 1791173272654
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "tool_call_update",
+     "toolCallId": "t2",
+     "status": "completed",
+     "messageId": "m_8dODxHTo7fQWOiew"
+    }
+   },
+   "recordedAt": 1791173272646,
+   "seq": 1791173272655
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "tool_call_update",
+     "toolCallId": "orphan",
+     "title": "Late",
+     "status": "completed",
+     "messageId": "m_g9BaX5pWKqgDB5rE"
+    }
+   },
+   "recordedAt": 1791173272646,
+   "seq": 1791173272656
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "plan",
+     "entries": [
+      {
+       "content": "edit it",
+       "priority": "medium",
+       "status": "completed"
+      }
+     ],
+     "messageId": "m_tqJ6proniUvDfdR4"
+    }
+   },
+   "recordedAt": 1791173272646,
+   "seq": 1791173272657
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "agent_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "All done."
+     },
+     "messageId": "m_xa3PTAJpkw8onaxl"
+    }
+   },
+   "recordedAt": 1791173272647,
+   "seq": 1791173272658
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "usage_update",
+     "used": 1200,
+     "size": 200000,
+     "cost": {
+      "amount": 0.01,
+      "currency": "USD"
+     },
+     "_meta": {
+      "hydra-acp": {
+       "upstreamSessionId": "fake-1419311-1",
+       "agentId": "fake"
+      }
+     }
+    }
+   },
+   "recordedAt": 1791173272647
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "turn_complete",
+     "messageId": "m_hvRlMemrWD7WEFVw",
+     "stopReason": "end_turn"
+    }
+   },
+   "recordedAt": 1791173272647,
+   "seq": 1791173272659
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "prompt_received",
+     "messageId": "m_T6lJhlETkzT3D2tN",
+     "prompt": [
+      {
+       "type": "text",
+       "text": "ping"
+      }
+     ],
+     "sentBy": {
+      "clientId": "cli_kV4zp02o",
+      "name": "scratch-test"
+     }
+    }
+   },
+   "recordedAt": 1791173272647,
+   "seq": 1791173272660
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "user_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "ping"
+     },
+     "_meta": {
+      "hydra-acp": {
+       "compatFor": "prompt_received"
+      }
+     },
+     "messageId": "m_gx6Ow5C7m8Qc7GRT"
+    }
+   },
+   "recordedAt": 1791173272647,
+   "seq": 1791173272661
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "agent_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "pong"
+     },
+     "messageId": "m_zomiam5rOS6g9jaC"
+    }
+   },
+   "recordedAt": 1791173272648,
+   "seq": 1791173272662
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "usage_update",
+     "used": 1200,
+     "size": 200000,
+     "cost": {
+      "amount": 0.01,
+      "currency": "USD"
+     },
+     "_meta": {
+      "hydra-acp": {
+       "upstreamSessionId": "fake-1419311-1",
+       "agentId": "fake"
+      }
+     }
+    }
+   },
+   "recordedAt": 1791173272648
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "turn_complete",
+     "messageId": "m_VdN9WdcljxWcPfpg",
+     "stopReason": "end_turn"
+    }
+   },
+   "recordedAt": 1791173272648,
+   "seq": 1791173272663
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "prompt_received",
+     "messageId": "m_OanKmZUPg6EZ85pR",
+     "prompt": [
+      {
+       "type": "text",
+       "text": "script:refuse"
+      }
+     ],
+     "sentBy": {
+      "clientId": "cli_kV4zp02o",
+      "name": "scratch-test"
+     }
+    }
+   },
+   "recordedAt": 1791173272648,
+   "seq": 1791173272664
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "user_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "script:refuse"
+     },
+     "_meta": {
+      "hydra-acp": {
+       "compatFor": "prompt_received"
+      }
+     },
+     "messageId": "m_QLtSyrdpXE28qogs"
+    }
+   },
+   "recordedAt": 1791173272648,
+   "seq": 1791173272665
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "agent_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "no"
+     },
+     "messageId": "m_6O3tm4S2642gX4XV"
+    }
+   },
+   "recordedAt": 1791173272648,
+   "seq": 1791173272666
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "usage_update",
+     "used": 1200,
+     "size": 200000,
+     "cost": {
+      "amount": 0.01,
+      "currency": "USD"
+     },
+     "_meta": {
+      "hydra-acp": {
+       "upstreamSessionId": "fake-1419311-1",
+       "agentId": "fake"
+      }
+     }
+    }
+   },
+   "recordedAt": 1791173272649
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "turn_complete",
+     "messageId": "m_dA5H4eaeIb3frVQv",
+     "stopReason": "refusal"
+    }
+   },
+   "recordedAt": 1791173272649,
+   "seq": 1791173272667
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "prompt_received",
+     "messageId": "m_UAJgWVbBhb0ce5Z8",
+     "prompt": [
+      {
+       "type": "text",
+       "text": "script:hang"
+      }
+     ],
+     "sentBy": {
+      "clientId": "cli_kV4zp02o",
+      "name": "scratch-test"
+     }
+    }
+   },
+   "recordedAt": 1791173272649,
+   "seq": 1791173272668
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "user_message_chunk",
+     "content": {
+      "type": "text",
+      "text": "script:hang"
+     },
+     "_meta": {
+      "hydra-acp": {
+       "compatFor": "prompt_received"
+      }
+     },
+     "messageId": "m_0J19qbubNtiCc2gB"
+    }
+   },
+   "recordedAt": 1791173272649,
+   "seq": 1791173272669
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "tool_call",
+     "toolCallId": "h1",
+     "title": "Wait",
+     "kind": "other",
+     "status": "in_progress",
+     "messageId": "m_rY82jic7q9w2gYzS"
+    }
+   },
+   "recordedAt": 1791173272649,
+   "seq": 1791173272670
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "tool_call_update",
+     "toolCallId": "h1",
+     "status": "failed",
+     "_meta": {
+      "hydra-acp": {
+       "synthetic": true,
+       "closedBy": "cancelled"
+      }
+     },
+     "messageId": "m_nSaH7B6yRLmJq8p7"
+    }
+   },
+   "recordedAt": 1791173273150,
+   "seq": 1791173273150
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "usage_update",
+     "used": 1200,
+     "size": 200000,
+     "cost": {
+      "amount": 0.01,
+      "currency": "USD"
+     },
+     "_meta": {
+      "hydra-acp": {
+       "upstreamSessionId": "fake-1419311-1",
+       "agentId": "fake"
+      }
+     }
+    }
+   },
+   "recordedAt": 1791173273151
+  },
+  {
+   "method": "session/update",
+   "params": {
+    "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+    "update": {
+     "sessionUpdate": "turn_complete",
+     "messageId": "m_uJokcLavAh0K2IPP",
+     "stopReason": "cancelled"
+    }
+   },
+   "recordedAt": 1791173273151,
+   "seq": 1791173273151
+  }
+ ],
+ "replay": [
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "session_info_update",
+    "title": "script:tools"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173273459
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "available_commands_update",
+    "availableCommands": [
+     {
+      "name": "hydra",
+      "description": "Hydra session command (kill, restart, title, agent <agent>)"
+     },
+     {
+      "name": "model",
+      "description": "Switch model; omit arg to list available models"
+     },
+     {
+      "name": "mode",
+      "description": "Switch mode; omit arg to list available modes"
+     },
+     {
+      "name": "sessions",
+      "description": "List all sessions"
+     },
+     {
+      "name": "help",
+      "description": "Show available commands"
+     },
+     {
+      "name": "title",
+      "description": "Alias for '/hydra title': Regenerate the session title + synopsis via the agent (or set title manually with an arg)"
+     },
+     {
+      "name": "agent <agent | status>",
+      "description": "Alias for '/hydra agent': Schedule a swap to a different agent (synthesizes a brief in the target's idiom, rotates on idle); `status` reports any pending swap"
+     },
+     {
+      "name": "workspace <start [name] [--clean] | sync | merge | apply | stop | detach | clean [--deep] | discard | status>",
+      "description": "Alias for '/hydra workspace': Move this session into an isolated workspace so its edits cannot collide with other work, then land or discard them. `start` copies your uncommitted changes in and leaves the real tree untouched; `start --clean` leaves them behind so the workspace begins at the last commit. `stop` merges and returns; `discard` throws the work away and returns; `detach` returns without merging, leaving the workspace and its branch intact; `merge` lands the work without leaving; `apply` also stays, but delivers the work as ONE staged, uncommitted changeset instead of as the agent's commits, so you review and commit it yourself, with no fast-forward needed, which is what makes it work once the source has moved on; `clean` throws away everything done in the workspace and stays there, putting it back exactly as `start --clean` would have made it (add `--deep` to rebuild dependencies and carried config files too, rather than keeping them); `sync` pulls the source's committed history INTO the workspace, so you can test against what you will land onto, and because landing is fast-forward-only, syncing is also how you recover once the source has moved on. `start <name>` naming a workspace another live session is already in JOINS it instead of making a second one, so two sessions can share a checkout deliberately: edits interleave, `stop` behaves as `detach` while anyone else is still there, and the work lands when the last of them leaves."
+     },
+     {
+      "name": "kill",
+      "description": "Alias for '/hydra kill': Close this session (kills the agent; record is kept so it can be resumed later)"
+     },
+     {
+      "name": "restart",
+      "description": "Alias for '/hydra restart': Restart the agent with a fresh session/new while preserving conversation history (useful when the proxy has changed available models)"
+     },
+     {
+      "name": "compact",
+      "description": "Alias for '/hydra compact': Compact this session's history. Use '/hydra compact status' to inspect current compaction state without triggering."
+     },
+     {
+      "name": "uncompact",
+      "description": "Alias for '/hydra uncompact': Roll back the most recent compaction swap (only available immediately after a swap, before any new turns)"
+     },
+     {
+      "name": "fork [--verbatim] [prompt]",
+      "description": "Alias for '/hydra fork': Fork this conversation into a new session (default: synthesis mode with a synopsis brief; pass --verbatim to slice at the last completed turn instead). A prompt is sent to the fork as its first turn once it's ready."
+     },
+     {
+      "name": "config [<id> [<value>]]",
+      "description": "Alias for '/hydra config': List or set an agent-advertised configOption (model, mode, effort, etc.). With no args, lists all options; with <id>, shows its choices; with <id> <value>, applies it."
+     }
+    ]
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173273459
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "usage_update",
+    "used": 1200,
+    "size": 200000,
+    "cost": {
+     "amount": 0.01,
+     "currency": "USD"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173273459
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "prompt_received",
+    "messageId": "m_bucTWAOQZ2LHkb9z",
+    "prompt": [
+     {
+      "type": "text",
+      "text": "script:tools"
+     }
+    ],
+    "sentBy": {
+     "clientId": "cli_kV4zp02o",
+     "name": "scratch-test"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272644,
+     "seq": 1791173272644
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "user_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "script:tools"
+    },
+    "_meta": {
+     "hydra-acp": {
+      "compatFor": "prompt_received"
+     }
+    },
+    "messageId": "m_EXee0Z89Fd8cMBuJ"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272644,
+     "seq": 1791173272645
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_thought_chunk",
+    "content": {
+     "type": "text",
+     "text": "Let me look."
+    },
+    "messageId": "m_wkwuOucjOMGWUGz1"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272646
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "\n"
+    },
+    "messageId": "m_fnAU8fF7XCZrKD7Z"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272647
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "t1",
+    "title": "Run ls",
+    "kind": "execute",
+    "status": "pending",
+    "rawInput": {},
+    "_meta": {
+     "claudeCode": {
+      "toolName": "Bash"
+     }
+    },
+    "messageId": "m_O62mkJUvjL350gFa"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272648
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "t1",
+    "status": "completed",
+    "content": [
+     {
+      "type": "content",
+      "content": {
+       "type": "text",
+       "text": "a.txt\nb.txt"
+      }
+     }
+    ],
+    "messageId": "m_9rdtqd87x6yCgUO2",
+    "rawInput": {
+     "command": "ls"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272645,
+     "seq": 1791173272650
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "Two files. Now an edit."
+    },
+    "messageId": "m_8IAkZjqECvcSvlI1"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272652
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "plan",
+    "entries": [
+     {
+      "content": "edit it",
+      "priority": "medium",
+      "status": "completed"
+     }
+    ],
+    "messageId": "m_tqJ6proniUvDfdR4"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272657
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "t2",
+    "title": "Edit a.txt",
+    "kind": "edit",
+    "status": "in_progress",
+    "rawInput": {
+     "path": "/tmp/a.txt"
+    },
+    "content": [
+     {
+      "type": "diff",
+      "path": "/tmp/a.txt",
+      "oldText": "one",
+      "newText": "two"
+     }
+    ],
+    "messageId": "m_e5x8NvvvyZ2PSkJj"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272654
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "t2",
+    "status": "completed",
+    "messageId": "m_8dODxHTo7fQWOiew"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272655
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "orphan",
+    "title": "Late",
+    "status": "completed",
+    "messageId": "m_g9BaX5pWKqgDB5rE"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272646,
+     "seq": 1791173272656
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "All done."
+    },
+    "messageId": "m_xa3PTAJpkw8onaxl"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272647,
+     "seq": 1791173272658
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "turn_complete",
+    "messageId": "m_hvRlMemrWD7WEFVw",
+    "stopReason": "end_turn"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272647,
+     "seq": 1791173272659
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "prompt_received",
+    "messageId": "m_T6lJhlETkzT3D2tN",
+    "prompt": [
+     {
+      "type": "text",
+      "text": "ping"
+     }
+    ],
+    "sentBy": {
+     "clientId": "cli_kV4zp02o",
+     "name": "scratch-test"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272647,
+     "seq": 1791173272660
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "user_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "ping"
+    },
+    "_meta": {
+     "hydra-acp": {
+      "compatFor": "prompt_received"
+     }
+    },
+    "messageId": "m_gx6Ow5C7m8Qc7GRT"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272647,
+     "seq": 1791173272661
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "pong"
+    },
+    "messageId": "m_zomiam5rOS6g9jaC"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272662
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "turn_complete",
+    "messageId": "m_VdN9WdcljxWcPfpg",
+    "stopReason": "end_turn"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272663
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "prompt_received",
+    "messageId": "m_OanKmZUPg6EZ85pR",
+    "prompt": [
+     {
+      "type": "text",
+      "text": "script:refuse"
+     }
+    ],
+    "sentBy": {
+     "clientId": "cli_kV4zp02o",
+     "name": "scratch-test"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272664
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "user_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "script:refuse"
+    },
+    "_meta": {
+     "hydra-acp": {
+      "compatFor": "prompt_received"
+     }
+    },
+    "messageId": "m_QLtSyrdpXE28qogs"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272665
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "agent_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "no"
+    },
+    "messageId": "m_6O3tm4S2642gX4XV"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272648,
+     "seq": 1791173272666
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "turn_complete",
+    "messageId": "m_dA5H4eaeIb3frVQv",
+    "stopReason": "refusal"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272649,
+     "seq": 1791173272667
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "prompt_received",
+    "messageId": "m_UAJgWVbBhb0ce5Z8",
+    "prompt": [
+     {
+      "type": "text",
+      "text": "script:hang"
+     }
+    ],
+    "sentBy": {
+     "clientId": "cli_kV4zp02o",
+     "name": "scratch-test"
+    }
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272649,
+     "seq": 1791173272668
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "user_message_chunk",
+    "content": {
+     "type": "text",
+     "text": "script:hang"
+    },
+    "_meta": {
+     "hydra-acp": {
+      "compatFor": "prompt_received"
+     }
+    },
+    "messageId": "m_0J19qbubNtiCc2gB"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272649,
+     "seq": 1791173272669
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call",
+    "toolCallId": "h1",
+    "title": "Wait",
+    "kind": "other",
+    "status": "in_progress",
+    "messageId": "m_rY82jic7q9w2gYzS"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173272649,
+     "seq": 1791173272670
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "tool_call_update",
+    "toolCallId": "h1",
+    "status": "failed",
+    "_meta": {
+     "hydra-acp": {
+      "synthetic": true,
+      "closedBy": "cancelled"
+     }
+    },
+    "messageId": "m_nSaH7B6yRLmJq8p7"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173273150,
+     "seq": 1791173273150
+    }
+   }
+  },
+  {
+   "sessionId": "hydra_session_hRtPejGAusBfdLo4",
+   "update": {
+    "sessionUpdate": "turn_complete",
+    "messageId": "m_uJokcLavAh0K2IPP",
+    "stopReason": "cancelled"
+   },
+   "_meta": {
+    "hydra-acp": {
+     "recordedAt": 1791173273151,
+     "seq": 1791173273151
+    }
+   }
+  }
+ ],
+ "attachMeta": {
+  "hydra-acp": {
+   "attachedClients": 3,
+   "status": "warm",
+   "busy": false,
+   "awaitingInput": false,
+   "cwd": "/tmp",
+   "title": "script:tools",
+   "agentId": "fake",
+   "upstreamSessionId": "fake-1419311-1",
+   "currentUsage": {
+    "used": 1200,
+    "size": 200000,
+    "costAmount": 0.01,
+    "costCurrency": "USD"
+   },
+   "originatingClient": {
+    "name": "scratch-test",
+    "version": "0"
+   },
+   "interactive": true,
+   "armedTasks": 0,
+   "availableCommands": [
+    {
+     "name": "hydra",
+     "description": "Hydra session command (kill, restart, title, agent <agent>)"
+    },
+    {
+     "name": "model",
+     "description": "Switch model; omit arg to list available models"
+    },
+    {
+     "name": "mode",
+     "description": "Switch mode; omit arg to list available modes"
+    },
+    {
+     "name": "sessions",
+     "description": "List all sessions"
+    },
+    {
+     "name": "help",
+     "description": "Show available commands"
+    },
+    {
+     "name": "title",
+     "description": "Alias for '/hydra title': Regenerate the session title + synopsis via the agent (or set title manually with an arg)"
+    },
+    {
+     "name": "agent <agent | status>",
+     "description": "Alias for '/hydra agent': Schedule a swap to a different agent (synthesizes a brief in the target's idiom, rotates on idle); `status` reports any pending swap"
+    },
+    {
+     "name": "workspace <start [name] [--clean] | sync | merge | apply | stop | detach | clean [--deep] | discard | status>",
+     "description": "Alias for '/hydra workspace': Move this session into an isolated workspace so its edits cannot collide with other work, then land or discard them. `start` copies your uncommitted changes in and leaves the real tree untouched; `start --clean` leaves them behind so the workspace begins at the last commit. `stop` merges and returns; `discard` throws the work away and returns; `detach` returns without merging, leaving the workspace and its branch intact; `merge` lands the work without leaving; `apply` also stays, but delivers the work as ONE staged, uncommitted changeset instead of as the agent's commits, so you review and commit it yourself, with no fast-forward needed, which is what makes it work once the source has moved on; `clean` throws away everything done in the workspace and stays there, putting it back exactly as `start --clean` would have made it (add `--deep` to rebuild dependencies and carried config files too, rather than keeping them); `sync` pulls the source's committed history INTO the workspace, so you can test against what you will land onto, and because landing is fast-forward-only, syncing is also how you recover once the source has moved on. `start <name>` naming a workspace another live session is already in JOINS it instead of making a second one, so two sessions can share a checkout deliberately: edits interleave, `stop` behaves as `detach` while anyone else is still there, and the work lands when the last of them leaves."
+    },
+    {
+     "name": "kill",
+     "description": "Alias for '/hydra kill': Close this session (kills the agent; record is kept so it can be resumed later)"
+    },
+    {
+     "name": "restart",
+     "description": "Alias for '/hydra restart': Restart the agent with a fresh session/new while preserving conversation history (useful when the proxy has changed available models)"
+    },
+    {
+     "name": "compact",
+     "description": "Alias for '/hydra compact': Compact this session's history. Use '/hydra compact status' to inspect current compaction state without triggering."
+    },
+    {
+     "name": "uncompact",
+     "description": "Alias for '/hydra uncompact': Roll back the most recent compaction swap (only available immediately after a swap, before any new turns)"
+    },
+    {
+     "name": "fork [--verbatim] [prompt]",
+     "description": "Alias for '/hydra fork': Fork this conversation into a new session (default: synthesis mode with a synopsis brief; pass --verbatim to slice at the last completed turn instead). A prompt is sent to the fork as its first turn once it's ready."
+    },
+    {
+     "name": "config [<id> [<value>]]",
+     "description": "Alias for '/hydra config': List or set an agent-advertised configOption (model, mode, effort, etc.). With no args, lists all options; with <id>, shows its choices; with <id> <value>, applies it."
+    }
+   ],
+   "agentCapabilities": {
+    "loadSession": false,
+    "promptCapabilities": {}
+   },
+   "armedTaskList": []
+  }
+ }
+}

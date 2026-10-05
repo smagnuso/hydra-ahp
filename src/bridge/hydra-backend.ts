@@ -1,18 +1,21 @@
 import { homedir } from "node:os";
 import type {
-  ChatState,
   ListSessionsParams,
   ListSessionsResult,
+  SessionState,
 } from "@microsoft/agent-host-protocol";
 import { ErrorCodes, RpcError } from "../rpc/peer.js";
 import type { ActionDecision, ActionRequest, Backend } from "../protocol/backend.js";
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import { HydraHttpError, type HydraRest } from "../hydra/rest.js";
+import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
 import { AHP_URI_KEY, type Catalog } from "./catalog.js";
 import { chatKey, chatUri, cwdToUri, isChatUri, isSessionUri, sessionKey, sessionUri, uriToCwd } from "./ids.js";
-import { STATUS_IDLE, entryToSummary, summaryToSessionState } from "./summary.js";
+import { emptyChat } from "./replay.js";
+import { SessionBridge } from "./session-bridge.js";
+import { STATUS_IDLE, UNTITLED, entryToSummary, summaryToSessionState } from "./summary.js";
 
 const log = logger("backend");
 
@@ -21,6 +24,7 @@ const NO_SUCH_PROVIDER = -32002;
 const SESSION_EXISTS = -32003;
 
 const FAILED_CHANNEL_LINGER_MS = 30_000;
+const MAX_IDLE_BRIDGES = 16;
 
 const action = (value: Record<string, unknown>) => value as never;
 
@@ -28,6 +32,7 @@ export interface HydraBackendOptions {
   catalog: Catalog;
   rest: HydraRest;
   extState: ExtensionState;
+  sessions: HydraSessions;
   version: string;
 }
 
@@ -35,11 +40,7 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function emptyChat(uri: string, title: string, modifiedAt: string, status: number): ChatState {
-  return { resource: uri, title, status, modifiedAt, turns: [] } as unknown as ChatState;
-}
-
-// Read-only for now: the catalog, createSession and disposeSession; chat content arrives with the session bridge.
+// The catalog, createSession and disposeSession, plus one session bridge per session a client has opened a chat of.
 export class HydraBackend implements Backend {
   readonly serverInfo: { name: string; version: string };
   readonly defaultDirectory = cwdToUri(homedir());
@@ -47,21 +48,86 @@ export class HydraBackend implements Backend {
   private readonly catalog: Catalog;
   private readonly rest: HydraRest;
   private readonly extState: ExtensionState;
+  private readonly sessions: HydraSessions;
+  private readonly bridges = new Map<string, SessionBridge>();
 
   constructor(options: HydraBackendOptions) {
     this.catalog = options.catalog;
     this.rest = options.rest;
     this.extState = options.extState;
+    this.sessions = options.sessions;
     this.serverInfo = { name: "hydra-ahp", version: options.version };
   }
 
   async start(core: ProtocolCore): Promise<void> {
     this.core = core;
+    this.catalog.onChange(() => this.onCatalogChange());
     await this.catalog.start(core);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.catalog.stop();
+    const bridges = [...this.bridges.values()];
+    this.bridges.clear();
+    await Promise.all(bridges.map((bridge) => bridge.dispose().catch(() => undefined)));
+  }
+
+  // The bridge for a session or chat channel, once the session exists in Hydra.
+  bridgeFor(channel: string): SessionBridge | undefined {
+    const session = isChatUri(channel) ? sessionUri(chatKey(channel)) : channel;
+    const hydraId = this.catalog.resolve(session);
+    if (!hydraId) {
+      return undefined;
+    }
+    let bridge = this.bridges.get(hydraId);
+    if (!bridge) {
+      bridge = new SessionBridge({
+        hydraId,
+        sessionUri: session,
+        chatUri: chatUri(sessionKey(session)),
+        core: this.core,
+        catalog: this.catalog,
+        rest: this.rest,
+        sessions: this.sessions,
+      });
+      this.bridges.set(hydraId, bridge);
+    }
+    return bridge;
+  }
+
+  private onCatalogChange(): void {
+    for (const [hydraId, bridge] of [...this.bridges]) {
+      if (!this.catalog.entry(hydraId)) {
+        this.bridges.delete(hydraId);
+        void bridge.dispose().catch(() => undefined);
+        continue;
+      }
+      bridge.onCatalogChange();
+    }
+    this.syncTitles();
+  }
+
+  private syncTitles(): void {
+    for (const uri of this.core.store.uris()) {
+      if (!isSessionUri(uri)) {
+        continue;
+      }
+      const summary = this.catalog.summaryFor(uri);
+      const state = this.core.store.state(uri) as SessionState | undefined;
+      if (summary && state && summary.title !== UNTITLED && state.title !== summary.title) {
+        this.core.publish(uri, action({ type: "session/titleChanged", title: summary.title }));
+      }
+    }
+  }
+
+  private evictIdle(): void {
+    const idle = [...this.bridges].filter(
+      ([, bridge]) => !bridge.isAttached && !this.core.hasSubscribers(bridge.chat),
+    );
+    for (const [hydraId, bridge] of idle.slice(0, Math.max(0, idle.length - MAX_IDLE_BRIDGES))) {
+      this.bridges.delete(hydraId);
+      void bridge.dispose().catch(() => undefined);
+    }
   }
 
   listSessions(params: ListSessionsParams): ListSessionsResult {
@@ -72,30 +138,31 @@ export class HydraBackend implements Backend {
     }
   }
 
-  // Serves a static view of a catalog row until the session bridge takes over attaching.
-  attach(uri: string): void {
-    if (this.core.store.has(uri)) {
+  // A session channel is a view of the catalog row; the chat channel is built by the bridge from Hydra's history.
+  async attach(uri: string): Promise<void> {
+    if (isChatUri(uri)) {
+      if (this.core.store.has(uri) && !this.catalog.resolve(sessionUri(chatKey(uri)))) {
+        return;
+      }
+      await this.bridgeFor(uri)?.attach();
       return;
     }
-    let sessionChannel: string;
-    if (isSessionUri(uri)) {
-      sessionChannel = uri;
-    } else if (isChatUri(uri)) {
-      sessionChannel = sessionUri(chatKey(uri));
-    } else {
+    if (!isSessionUri(uri) || this.core.store.has(uri)) {
       return;
     }
-    const summary = this.catalog.summaryFor(sessionChannel);
-    if (!summary) {
+    const summary = this.catalog.summaryFor(uri);
+    if (summary) {
+      this.core.createChannel(uri, summaryToSessionState(summary, "ready"));
+    }
+  }
+
+  async detach(uri: string): Promise<void> {
+    if (!isChatUri(uri)) {
       return;
     }
-    if (!this.core.store.has(sessionChannel)) {
-      this.core.createChannel(sessionChannel, summaryToSessionState(summary, "ready"));
-    }
-    const chat = chatUri(sessionKey(sessionChannel));
-    if (!this.core.store.has(chat)) {
-      this.core.createChannel(chat, emptyChat(chat, summary.title, summary.modifiedAt, summary.status));
-    }
+    const bridge = this.bridgeFor(uri);
+    await bridge?.detach();
+    this.evictIdle();
   }
 
   handleAction(_request: ActionRequest): ActionDecision {
@@ -109,9 +176,25 @@ export class HydraBackend implements Backend {
         return this.createSession(body);
       case "disposeSession":
         return this.disposeSession(body);
+      case "fetchTurns":
+        return this.fetchTurns(body);
       default:
         throw new RpcError(ErrorCodes.MethodNotFound, `method not found: ${method}`);
     }
+  }
+
+  private async fetchTurns(params: Record<string, unknown>): Promise<Record<string, never>> {
+    const channel = params.channel;
+    if (typeof channel !== "string" || !isChatUri(channel) || !this.core.store.has(channel)) {
+      throw new RpcError(SESSION_NOT_FOUND, "Chat not found");
+    }
+    const cursor = typeof params.cursor === "string" ? params.cursor : undefined;
+    const bridge = this.bridgeFor(channel);
+    if (!bridge) {
+      throw new RpcError(SESSION_NOT_FOUND, "Chat not found");
+    }
+    await bridge.fetchTurns(cursor);
+    return {};
   }
 
   private createSession(params: Record<string, unknown>): null {

@@ -38,6 +38,7 @@ export class Catalog {
   private readonly lookedUp = new Set<string>();
   private readonly published = new Map<string, SessionSummary>();
   private readonly pendingCreations = new Set<string>();
+  private readonly changeListeners = new Set<() => void>();
   private cursor: number | undefined;
   private polls = 0;
   private agentList: AgentInfo[] = [];
@@ -74,6 +75,10 @@ export class Catalog {
     this.stopped = true;
     clearInterval(this.pollTimer);
     clearInterval(this.warmTimer);
+  }
+
+  onChange(listener: () => void): void {
+    this.changeListeners.add(listener);
   }
 
   agents(): AgentInfo[] {
@@ -289,6 +294,9 @@ export class Catalog {
       this.forgetChannels(uri);
     }
     this.syncRoot();
+    for (const listener of this.changeListeners) {
+      listener();
+    }
   }
 
   private forgetChannels(uri: string): void {

@@ -8,6 +8,7 @@ import type { Config } from "./config.js";
 import { HydraClient } from "./hydra/client.js";
 import { ExtensionState } from "./hydra/ext-state.js";
 import { HydraRest } from "./hydra/rest.js";
+import { HydraSessions } from "./hydra/sessions.js";
 import { checkHydraVersion } from "./hydra/version.js";
 import { logger, setDebug } from "./util/log.js";
 
@@ -56,7 +57,8 @@ export async function startApp(config: Config, version: string): Promise<App> {
     ...(config.pollMs !== undefined ? { pollMs: config.pollMs } : {}),
     ...(config.warmPollMs !== undefined ? { warmPollMs: config.warmPollMs } : {}),
   });
-  const backend = new HydraBackend({ catalog, rest, extState, version });
+  const sessions = new HydraSessions(client, { name: "hydra-ahp", version });
+  const backend = new HydraBackend({ catalog, rest, extState, sessions, version });
   const core = new ProtocolCore({ backend });
   await core.start();
 
@@ -83,8 +85,8 @@ export async function startApp(config: Config, version: string): Promise<App> {
     async stop() {
       stopping = true;
       clearInterval(refreshTimer);
-      backend.stop();
       await listener.close();
+      await backend.stop();
       client.close();
     },
   };
