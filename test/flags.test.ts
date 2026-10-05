@@ -25,7 +25,10 @@ describe("flag store", () => {
     const store = new FlagStore(path);
     expect(store.set("hydra_session_a", { isArchived: true })).toBe(true);
     expect(store.set("beta:hydra_session_b", { isRead: true })).toBe(true);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows has no POSIX permission bits.
+    if (process.platform !== "win32") {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    }
     const again = new FlagStore(path);
     expect(again.get("hydra_session_a")).toEqual({ isRead: false, isArchived: true, archivedAt: store.get("hydra_session_a").archivedAt });
     expect(again.get("hydra_session_a").archivedAt).toBeTypeOf("number");

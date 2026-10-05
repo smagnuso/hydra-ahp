@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { FakeBackend } from "../src/protocol/fake-backend.js";
 import type { ClientContext } from "../src/protocol/backend.js";
@@ -67,7 +67,7 @@ describe("file access", () => {
   const edited = new EditedPaths();
 
   beforeAll(async () => {
-    dir = realpathSync(mkdtempSync(join(tmpdir(), "ahp-files-")));
+    dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ahp-files-")));
     proj = join(dir, "proj");
     secret = join(dir, "secret");
     outside = join(dir, "outside");
@@ -181,7 +181,7 @@ describe("file access", () => {
       expect(await code(client.resourceRead({ uri: u(join(secret, "key.txt")) }))).toBe(DENIED);
       expect(await code(client.resourceList({ uri: u(secret) }))).toBe(DENIED);
       expect(await code(client.resourceRead({ uri: u(join(outside, "other.txt")) }))).toBe(DENIED);
-      expect(await code(client.resourceRead({ uri: "file:///etc/passwd" }))).toBe(DENIED);
+      expect(await code(client.resourceRead({ uri: u(resolve(sep, "etc", "passwd")) }))).toBe(DENIED);
     });
 
     it("does not reveal whether an out-of-scope path exists", async () => {
@@ -424,21 +424,25 @@ describe("edited path extraction", () => {
   });
 
   it("collects image resource links as file URIs or paths", () => {
+    const shot = join(tmpdir(), "shot.png");
+    const photo = join(tmpdir(), "b.jpg");
     expect(
       extractResourceLinkImagePaths([
-        { type: "resource_link", uri: "file:///tmp/shot.png" },
-        { type: "resource_link", uri: "/tmp/b.jpg" },
-        { type: "resource_link", uri: "/tmp/notes.txt" },
+        { type: "resource_link", uri: pathToFileURL(shot).href },
+        { type: "resource_link", uri: photo },
+        { type: "resource_link", uri: join(tmpdir(), "notes.txt") },
       ]),
-    ).toEqual(["/tmp/shot.png", "/tmp/b.jpg"]);
+    ).toEqual([shot, photo]);
   });
 
   it("never records edits from federated sessions or relative paths", async () => {
     const paths = new EditedPaths();
-    paths.record("peer:abc", "/tmp/remote-edit");
+    const remote = join(tmpdir(), "remote-edit");
+    const local = join(tmpdir(), "local-edit");
+    paths.record("peer:abc", remote);
     paths.record("local", "relative/file");
-    expect(await paths.has("/tmp/remote-edit")).toBe(false);
-    paths.observe("local", { sessionUpdate: "tool_call", content: [{ type: "diff", path: "/tmp/local-edit" }] });
-    expect(await paths.has("/tmp/local-edit")).toBe(true);
+    expect(await paths.has(remote)).toBe(false);
+    paths.observe("local", { sessionUpdate: "tool_call", content: [{ type: "diff", path: local }] });
+    expect(await paths.has(local)).toBe(true);
   });
 });

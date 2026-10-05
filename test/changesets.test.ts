@@ -37,7 +37,8 @@ describe("uncommitted changes", () => {
     await harness?.stop();
     harness = undefined;
     if (dir) {
-      rmSync(dir, { recursive: true, force: true });
+      // Windows can hold the directory briefly after the last git process exits.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       dir = undefined;
     }
   });

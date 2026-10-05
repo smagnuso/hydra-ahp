@@ -10,7 +10,8 @@ import { cwdToUri } from "../src/bridge/ids.js";
 const TERMINAL = "agenthost-terminal:/t1";
 const WINDOWS = process.platform === "win32";
 // The same steps in the shell each platform starts: print a computed value and the working directory, then exit with a code.
-const SHOW = WINDOWS ? "set N=4& echo hi-%N%2& cd\r\n" : "echo hi-$((40+2)); pwd\n";
+// cmd expands %N% when it reads the line, so the value is set by an earlier line.
+const SHOW = WINDOWS ? "set N=42\r\necho hi-%N%& cd\r\n" : "echo hi-$((40+2)); pwd\n";
 const EXIT = WINDOWS ? "exit 7\r\n" : "exit 7\n";
 const output = (state: TerminalState): string => state.content.map((part) => (part.type === "command" ? part.output : part.value)).join("");
 
@@ -29,7 +30,7 @@ describe("terminals", () => {
 
   it("runs a shell for a full token: output streams, input and resize reach it, dispose kills it", async () => {
     harness = await startBridgeHarness();
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), "ahp-term-")));
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "ahp-term-")));
     const session = await connected(true);
     await session.client.request("createTerminal", {
       channel: TERMINAL,

@@ -20,7 +20,7 @@ export const DAEMON_JS = [
 ].find((candidate) => candidate && existsSync(candidate)) ?? "cli/dist/daemon.js";
 export const EXTENSION_JS = join(REPO, "dist", "index.js");
 // A directory every platform has, for sessions that only need some working directory.
-export const WORK_DIR = realpathSync(tmpdir());
+export const WORK_DIR = realpathSync.native(tmpdir());
 export const WORK_URI = cwdToUri(WORK_DIR);
 export const FAKE_AGENT = join(here, "fake-acp.mjs");
 export const PROBE_EXTENSION = join(here, "probe-extension.mjs");
