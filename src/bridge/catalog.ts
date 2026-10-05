@@ -16,6 +16,7 @@ const log = logger("catalog");
 
 export const AHP_URI_KEY = "ahpUri";
 export const AHP_CHAT_KEY = "ahpChat";
+export const AHP_FLAGS_KEY = "flags";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 500;
@@ -62,6 +63,9 @@ export class Catalog {
   // Sessions and chats this extension is still creating, mapped to the session URI they belong to.
   private readonly pendingChats = new Map<string, string>();
   private readonly lookedUp = new Set<string>();
+  // Read and archive marks of local sessions, which live in their extension_state so they travel with the session.
+  private readonly sessionFlags = new Map<string, SessionFlags>();
+  private readonly flagWrites = new Map<string, Promise<void>>();
   private readonly published = new Map<string, SessionSummary>();
   private readonly pendingCreations = new Set<string>();
   private readonly changeListeners = new Set<() => void>();
@@ -161,16 +165,53 @@ export class Catalog {
   }
 
   flagsFor(hydraId: string): SessionFlags {
+    if (this.isLocal(hydraId)) {
+      return this.sessionFlags.get(hydraId) ?? NO_FLAGS;
+    }
     return this.options.flags?.get(hydraId) ?? NO_FLAGS;
   }
 
   // Persists a read or archive change and tells root subscribers; returns whether anything changed.
   setFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
-    const changed = this.options.flags?.set(hydraId, patch) ?? false;
+    const changed = this.isLocal(hydraId) ? this.setSessionFlags(hydraId, patch) : (this.options.flags?.set(hydraId, patch) ?? false);
     if (changed) {
       this.reconcile();
     }
     return changed;
+  }
+
+  // Federated sessions keep their marks in this host's own file: their extension_state is on the peer, out of this extension's reach.
+  private isLocal(hydraId: string): boolean {
+    const entry = this.entries.get(hydraId);
+    return !isFederatedId(hydraId) && entry?.remote === undefined;
+  }
+
+  private setSessionFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
+    const before = this.sessionFlags.get(hydraId) ?? NO_FLAGS;
+    const next = { ...before, ...patch };
+    if (next.isRead === before.isRead && next.isArchived === before.isArchived) {
+      return false;
+    }
+    this.sessionFlags.set(hydraId, next);
+    this.writeFlags(hydraId, next);
+    return true;
+  }
+
+  // Writes for one session go out in order, so a quick read-then-unread cannot land reversed.
+  private writeFlags(hydraId: string, flags: SessionFlags): void {
+    const write = (): Promise<void> =>
+      flags.isRead || flags.isArchived ? this.extState.set(hydraId, AHP_FLAGS_KEY, flags) : this.extState.delete(hydraId, AHP_FLAGS_KEY);
+    const next = (this.flagWrites.get(hydraId) ?? Promise.resolve())
+      .then(write)
+      .catch((err: unknown) => {
+        log.warn(`saving the marks of ${hydraId} failed`, err instanceof Error ? err.message : err);
+      });
+    this.flagWrites.set(hydraId, next);
+    void next.finally(() => {
+      if (this.flagWrites.get(hydraId) === next) {
+        this.flagWrites.delete(hydraId);
+      }
+    });
   }
 
   summaryFor(uri: string): SessionSummary | undefined {
@@ -296,6 +337,7 @@ export class Catalog {
   private drop(id: string): void {
     this.entries.delete(id);
     this.options.flags?.forget(id);
+    this.sessionFlags.delete(id);
     this.stamps.delete(id);
     this.chatStamps.delete(id);
     this.liveConfigs.delete(id);
@@ -312,15 +354,17 @@ export class Catalog {
       while (next < todo.length) {
         const id = todo[next++] as string;
         try {
-          const value = await this.extState.get<string>(id, AHP_URI_KEY);
+          const state = await this.extState.list(id);
+          const value = state[AHP_URI_KEY];
           if (typeof value === "string" && !this.stamps.has(id)) {
             this.stamps.set(id, value);
-            const chat = await this.extState.get<{ chat?: unknown; at?: unknown; side?: unknown }>(id, AHP_CHAT_KEY);
+            const chat = state[AHP_CHAT_KEY] as { chat?: unknown; at?: unknown; side?: unknown } | undefined;
             if (chat && typeof chat.chat === "string") {
               const side = sideOrigin(chat.side);
               this.chatStamps.set(id, { chat: chat.chat, at: typeof chat.at === "number" ? chat.at : 0, ...(side ? { side } : {}) });
             }
           }
+          this.loadFlags(id, state[AHP_FLAGS_KEY]);
           this.lookedUp.add(id);
         } catch (err) {
           log.warn(`stamp lookup for ${id} failed`, err instanceof Error ? err.message : err);
@@ -328,6 +372,22 @@ export class Catalog {
       }
     };
     await Promise.all(Array.from({ length: Math.min(STAMP_LOOKUP_CONCURRENCY, todo.length) }, worker));
+  }
+
+  // A mark set here before the lookup finished is newer than what the bucket holds; marks from the old file move into the bucket.
+  private loadFlags(hydraId: string, stored: unknown): void {
+    if (this.sessionFlags.has(hydraId)) {
+      return;
+    }
+    const legacy = this.options.flags?.get(hydraId);
+    if (stored && typeof stored === "object") {
+      const value = stored as { isRead?: unknown; isArchived?: unknown };
+      this.sessionFlags.set(hydraId, { isRead: value.isRead === true, isArchived: value.isArchived === true });
+    } else if (legacy && (legacy.isRead || legacy.isArchived)) {
+      this.sessionFlags.set(hydraId, legacy);
+      this.writeFlags(hydraId, legacy);
+    }
+    this.options.flags?.forget(hydraId);
   }
 
   // Hydra's default list shows interactive sessions; the extension adds the ones it created.

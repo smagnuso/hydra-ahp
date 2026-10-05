@@ -8,7 +8,7 @@ export interface SessionFlags {
 
 export const NO_FLAGS: SessionFlags = { isRead: false, isArchived: false };
 
-// Host-wide read and archive state keyed by Hydra session id, so it also covers federated sessions.
+// Read and archive marks of federated sessions, keyed by Hydra session id; local sessions keep theirs in extension_state.
 export class FlagStore {
   private readonly flags = new Map<string, SessionFlags>();
 

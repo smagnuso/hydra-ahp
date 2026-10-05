@@ -33,6 +33,12 @@ describe("read and archive marks against a scratch daemon", () => {
     return result.items.find((item) => item.resource === sessionOf(id))?.status;
   }
 
+  // The marks live in the session's own extension_state, so they travel with it.
+  function marks(id: string): { isRead: boolean; isArchived: boolean } | undefined {
+    const meta = JSON.parse(readFileSync(join(daemon.home, "sessions", id, "meta.json"), "utf8"));
+    return meta.extensionState?.ahp?.flags;
+  }
+
   async function opened(): Promise<{ id: string; view: ChatView }> {
     const id = await driver.newSession("/tmp");
     await driver.prompt(id, "ping");
@@ -46,8 +52,8 @@ describe("read and archive marks against a scratch daemon", () => {
     expect(view.session().status & IS_ARCHIVED).toBe(IS_ARCHIVED);
     await view.until("chat mirrors the archive", (chat) => (chat.status & IS_ARCHIVED) === IS_ARCHIVED || undefined);
     await until("row archived", async () => (((await rowStatus(id)) ?? 0) & IS_ARCHIVED) === IS_ARCHIVED);
-    const stored = JSON.parse(readFileSync(join(daemon.home, "extensions", "ahp", "flags.json"), "utf8"));
-    expect(stored[id]).toEqual({ isRead: false, isArchived: true });
+    await until("archive stored with the session", () => marks(id)?.isArchived === true);
+    expect(marks(id)).toEqual({ isRead: false, isArchived: true });
     await view.dispatch({ type: "session/isArchivedChanged", isArchived: false }, view.sessionUri);
     await until("row unarchived", async () => (((await rowStatus(id)) ?? 0) & IS_ARCHIVED) === 0);
     await view.close();
@@ -73,8 +79,7 @@ describe("read and archive marks against a scratch daemon", () => {
     await until("row unread", async () => (((await rowStatus(id)) ?? 0) & IS_READ) === 0);
     await view.until("chat unread", (chat) => (chat.status & IS_READ) === 0 || undefined);
     await until("session unread", async () => (view.session().status & IS_READ) === 0);
-    const stored = JSON.parse(readFileSync(join(daemon.home, "extensions", "ahp", "flags.json"), "utf8"));
-    expect(stored[id]).toBeUndefined();
+    await until("marks cleared from the session", () => marks(id) === undefined);
     await view.close();
   });
 });

@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { FlagStore } from "../../src/store/flags.js";
 import { ModelStore } from "../../src/store/models.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -132,7 +133,18 @@ export class FakeHydra {
     },
   } as unknown as HydraRest;
 
-  extState = { get: async () => null } as unknown as ExtensionState;
+  readonly buckets = new Map<string, Record<string, unknown>>();
+  extState = {
+    get: async (id: string, key: string) => this.buckets.get(id)?.[key] ?? null,
+    list: async (id: string) => ({ ...this.buckets.get(id) }),
+    set: async (id: string, key: string, value: unknown) => {
+      this.buckets.set(id, { ...this.buckets.get(id), [key]: value });
+    },
+    delete: async (id: string, key: string) => {
+      const { [key]: _gone, ...rest } = this.buckets.get(id) ?? {};
+      this.buckets.set(id, rest);
+    },
+  } as unknown as ExtensionState;
 }
 
 export interface BridgeHarness {
@@ -159,15 +171,15 @@ export const ROW = (overrides: Partial<HydraSessionEntry> = {}): HydraSessionEnt
 
 export async function startBridgeHarness(
   setup: (hydra: FakeHydra) => void = () => undefined,
-  options: { permissionDelayMs?: number; models?: ModelStore } = {},
+  options: { permissionDelayMs?: number; models?: ModelStore; flags?: FlagStore } = {},
 ): Promise<BridgeHarness> {
   const hydra = new FakeHydra();
   hydra.rows = [ROW()];
   setup(hydra);
   const dir = mkdtempSync(join(tmpdir(), "ahp-bridge-"));
   const tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
-  const { models, ...backendOptions } = options;
-  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}) });
+  const { models, flags, ...backendOptions } = options;
+  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}), ...(flags ? { flags } : {}) });
   const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ shell: "/bin/sh", orphanGraceMs: 200 }), ...backendOptions });
   const core = new ProtocolCore({ backend });
   await core.start();
