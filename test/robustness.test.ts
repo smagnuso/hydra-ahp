@@ -109,6 +109,32 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
     expect(harness.hydra.writes).toEqual([]);
   });
 
+  it("never shows a permission request another client answers while it is held", async () => {
+    harness = await startBridgeHarness(undefined, { permissionDelayMs: 300 });
+    const { session } = await open();
+    await dispatch(session, { type: "chat/turnStarted", turnId: "t1", startedAt: new Date().toISOString(), message: { text: "go", origin: { kind: "user" } } });
+    const answer = harness.hydra.listener!.permission!({ sessionId: "h1", toolCall: { toolCallId: "c1", title: "run ls", status: "pending" }, options: OPTIONS });
+    await sleep(50);
+    hydra({ sessionUpdate: "permission_resolved", toolCallId: "c1", chosenOptionId: "allow" });
+    await expect(answer).rejects.toMatchObject({ code: -32601 });
+    await sleep(400);
+    expect(session.events.some((envelope) => envelope.action.type === "chat/toolCallReady" || envelope.action.type === "chat/toolCallConfirmed")).toBe(false);
+  });
+
+  it("shows a held permission request once the delay passes with nobody answering", async () => {
+    harness = await startBridgeHarness(undefined, { permissionDelayMs: 300 });
+    const { session, oracle } = await open();
+    await dispatch(session, { type: "chat/turnStarted", turnId: "t1", startedAt: new Date().toISOString(), message: { text: "go", origin: { kind: "user" } } });
+    const asked = Date.now();
+    const answer = harness.hydra.listener!.permission!({ sessionId: "h1", toolCall: { toolCallId: "c1", title: "run ls", status: "pending" }, options: OPTIONS });
+    await session.waitFor((envelope) => envelope.action.type === "chat/toolCallReady", 2000);
+    expect(Date.now() - asked).toBeGreaterThanOrEqual(250);
+    const confirmed = await dispatch(session, { type: "chat/toolCallConfirmed", turnId: "t1", toolCallId: "c1", approved: true, confirmed: "user-action" });
+    expect(confirmed.rejectionReason).toBeUndefined();
+    expect(await answer).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    expect(chat(session, oracle).activeTurn?.id).toBe("t1");
+  });
+
   it("leaves alone a queued turn that started while a cancel waited on its permissions", async () => {
     harness = await startBridgeHarness();
     const { session, oracle } = await open();

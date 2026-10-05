@@ -44,6 +44,8 @@ interface Parked {
   options: Json[];
   answer(result: unknown): void;
   abstain(): void;
+  // Set while a fresh request waits out the delay before clients see it.
+  held?: NodeJS.Timeout;
 }
 
 interface HeldSteer {
@@ -100,6 +102,7 @@ export interface BridgeDeps {
   catalog: Catalog;
   rest: HydraRest;
   sessions: HydraSessions;
+  permissionDelayMs?: number;
 }
 
 const action = (value: Json) => value as never;
@@ -1219,15 +1222,36 @@ export class SessionBridge implements SessionListener {
       event.reject(abstention());
       return;
     }
-    this.parked.get(toolCallId)?.abstain();
+    this.dropParked(this.parked.get(toolCallId));
     const options = (Array.isArray(event.params.options) ? event.params.options : []).map(bag);
-    this.parked.set(toolCallId, {
+    const parked: Parked = {
       turnId,
       options,
       answer: event.resolve,
       abstain: () => event.reject(abstention()),
-    });
-    sink(this.mapper.confirmationReady(toolCall, confirmationOptions(options)));
+    };
+    this.parked.set(toolCallId, parked);
+    const show = (into: (actions: Json[]) => void): void => into(this.mapper.confirmationReady(toolCall, confirmationOptions(options)));
+    const delay = this.deps.permissionDelayMs ?? 0;
+    // A request already open when a client joins has had its chance; a fresh one waits so an auto-approver's answer never shows.
+    if (joining || delay <= 0) {
+      show(sink);
+      return;
+    }
+    parked.held = setTimeout(() => {
+      parked.held = undefined;
+      if (this.parked.get(toolCallId) === parked) {
+        show((actions) => this.publish(actions));
+      }
+    }, delay);
+  }
+
+  private dropParked(parked: Parked | undefined): void {
+    if (!parked) {
+      return;
+    }
+    clearTimeout(parked.held);
+    parked.abstain();
   }
 
   // Another Hydra client answered first: clear the AHP prompt the way that client's answer went.
@@ -1238,7 +1262,12 @@ export class SessionBridge implements SessionListener {
       return;
     }
     this.parked.delete(toolCallId);
-    parked.abstain();
+    const unseen = parked.held !== undefined;
+    this.dropParked(parked);
+    // Answered while still held: no client ever saw it, so there is nothing to clear.
+    if (unseen) {
+      return;
+    }
     this.mapper.noteConfirmed(toolCallId);
     // Hydra reads the outcome's kind field while ACP answers name it outcome, so a spec-shaped answer arrives with no verdict.
     const outcome = bag(update.outcome);
@@ -1292,7 +1321,7 @@ export class SessionBridge implements SessionListener {
 
   private abstainAll(): void {
     for (const parked of this.parked.values()) {
-      parked.abstain();
+      this.dropParked(parked);
     }
     this.parked.clear();
     this.syncInputNeeded();

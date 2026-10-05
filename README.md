@@ -45,6 +45,7 @@ Set these in the `env` block of the `ahp` entry in `config.json`.
 | `HYDRA_AHP_TOKEN_IDLE_DAYS` | `90` | Days unused before a token expires |
 | `HYDRA_AHP_DIR_ROOTS` | home directory | Roots the new-session folder picker may browse (path-delimiter separated) |
 | `HYDRA_AHP_POLL_MS`, `HYDRA_AHP_WARM_POLL_MS` | built in | Catalog poll intervals |
+| `HYDRA_AHP_PERMISSION_DELAY_MS` | `500` | How long a new permission request is held before clients see it, so one an auto-approver answers never shows; `0` shows them at once |
 | `HYDRA_AHP_LOG_LEVEL` | info | Set to `debug` for verbose logs |
 
 ## Connect VS Code

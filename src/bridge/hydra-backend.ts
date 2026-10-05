@@ -43,6 +43,7 @@ export interface HydraBackendOptions {
   version: string;
   files: FileService;
   terminals?: TerminalService;
+  permissionDelayMs?: number;
 }
 
 function message(err: unknown): string {
@@ -63,6 +64,7 @@ export class HydraBackend implements Backend {
   private readonly creating = new Map<string, Promise<void>>();
   private readonly files: FileService;
   private readonly terminals: TerminalService | undefined;
+  private readonly permissionDelayMs: number;
 
   constructor(options: HydraBackendOptions) {
     this.catalog = options.catalog;
@@ -71,6 +73,7 @@ export class HydraBackend implements Backend {
     this.sessions = options.sessions;
     this.files = options.files;
     this.terminals = options.terminals;
+    this.permissionDelayMs = options.permissionDelayMs ?? 0;
     this.serverInfo = { name: "hydra-ahp", version: options.version };
   }
 
@@ -105,6 +108,7 @@ export class HydraBackend implements Backend {
         catalog: this.catalog,
         rest: this.rest,
         sessions: this.sessions,
+        permissionDelayMs: this.permissionDelayMs,
       });
       this.bridges.set(hydraId, bridge);
     }

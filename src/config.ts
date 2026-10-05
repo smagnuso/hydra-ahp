@@ -12,6 +12,7 @@ export interface Config {
   idleMs: number | undefined;
   pollMs: number | undefined;
   warmPollMs: number | undefined;
+  permissionDelayMs: number;
   debug: boolean;
   tokensPath: string;
   flagsPath: string;
@@ -62,6 +63,9 @@ export function dirRoots(env: NodeJS.ProcessEnv): string[] {
 }
 
 // Hydra injects the daemon coordinates and the extension token; the HYDRA_AHP_* variables come from the config.json env block.
+// Long enough for an auto-approver to answer first, so its requests never flash up in the client.
+const DEFAULT_PERMISSION_DELAY_MS = 500;
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const token = env.HYDRA_ACP_TOKEN;
   if (!token) {
@@ -79,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     idleMs: idleDays === undefined ? undefined : idleDays * 24 * 60 * 60 * 1000,
     pollMs: numberFrom(env, "HYDRA_AHP_POLL_MS"),
     warmPollMs: numberFrom(env, "HYDRA_AHP_WARM_POLL_MS"),
+    permissionDelayMs: numberFrom(env, "HYDRA_AHP_PERMISSION_DELAY_MS") ?? DEFAULT_PERMISSION_DELAY_MS,
     debug: env.HYDRA_AHP_LOG_LEVEL === "debug",
     tokensPath: tokensPath(env),
     flagsPath: flagsPath(env),

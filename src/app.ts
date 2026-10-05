@@ -69,7 +69,7 @@ export async function startApp(config: Config, version: string): Promise<App> {
   const sessions = new HydraSessions(client, { name: "hydra-ahp", version });
   const files = new FileService({ sessions: catalog, dirRoots: config.dirRoots });
   const terminals = new TerminalService();
-  const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals });
+  const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, permissionDelayMs: config.permissionDelayMs });
   const core = new ProtocolCore({ backend });
   await core.start();
 
