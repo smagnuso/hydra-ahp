@@ -6,7 +6,7 @@ import type { ChatState, Snapshot, ToolCallState } from "@microsoft/agent-host-p
 import { ChatView, markdown, user } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { openSession } from "../support/harness.js";
-import { ScratchDaemon, sleep, until } from "../support/scratch.js";
+import { ScratchDaemon, sleep, until, WORK_DIR } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 describe("write path against a scratch daemon", () => {
@@ -48,7 +48,7 @@ describe("write path against a scratch daemon", () => {
 
   // A session the driver created and prompted once, so Hydra lists it, opened in AHP.
   async function open(agentId?: string): Promise<ChatView> {
-    const id = await driver.newSession("/tmp", agentId);
+    const id = await driver.newSession(WORK_DIR, agentId);
     await driver.prompt(id, "ping");
     await until("session listed", () => listed(id, agentId ?? "fake"));
     const view = await ChatView.open(ahp, id, agentId ?? "fake");

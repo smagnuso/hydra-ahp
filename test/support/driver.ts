@@ -2,7 +2,7 @@ import type { RootState } from "@microsoft/agent-host-protocol";
 import type { HydraClient } from "../../src/hydra/client.js";
 import { RpcError } from "../../src/rpc/peer.js";
 import { openSession, type Session } from "./harness.js";
-import type { ScratchDaemon } from "./scratch.js";
+import { WORK_DIR, type ScratchDaemon } from "./scratch.js";
 
 export interface SessionUpdate {
   sessionId: string;
@@ -62,7 +62,7 @@ export class Driver {
     return new Driver(await daemon.client());
   }
 
-  async newSession(cwd = "/tmp", agentId?: string): Promise<string> {
+  async newSession(cwd = WORK_DIR, agentId?: string): Promise<string> {
     const result = await this.client.request<{ sessionId: string }>("session/new", {
       cwd,
       mcpServers: [],

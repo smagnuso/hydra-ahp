@@ -1,4 +1,4 @@
-import { isAbsolute, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import type { Changeset, ChangesetFile, ChangesetState } from "@microsoft/agent-host-protocol";
 import { cwdToUri } from "../bridge/ids.js";
 import type { ProtocolCore } from "../protocol/core.js";
@@ -244,7 +244,7 @@ function unsafeSegment(segment: string): boolean {
 }
 
 function toChangesetFile(changesetUri: string, root: string, rev: string, file: ChangedFile): ChangesetFile {
-  const fileUri = cwdToUri(`${root}/${file.path}`);
+  const fileUri = cwdToUri(join(root, file.path));
   const beforeUri = `${changesetUri}${AT_SEGMENT}${rev}/${file.path.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`;
   const counts = { ...(file.added !== undefined ? { added: file.added } : {}), ...(file.removed !== undefined ? { removed: file.removed } : {}) };
   return {

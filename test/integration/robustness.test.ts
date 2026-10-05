@@ -4,7 +4,7 @@ import { ChatView, markdown, user } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { act, openSession, type Session } from "../support/harness.js";
 import { ReducerOracle } from "../support/oracle.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_URI } from "../support/scratch.js";
 import { chatOf, sessionOf } from "../support/chat-uri.js";
 
 describe("agent-initiated turns and attach mid-turn against a scratch daemon", () => {
@@ -378,7 +378,7 @@ describe("idle close and session GC against a scratch daemon", () => {
 
   it("drops a never-prompted session the GC collected while subscribed, and keeps prompted ones", async () => {
     const channel = sessionOf("gc-unprompted");
-    await ahp.session.client.request("createSession", { channel, provider: "fake", workingDirectories: ["file:///tmp"] } as never);
+    await ahp.session.client.request("createSession", { channel, provider: "fake", workingDirectories: [WORK_URI] } as never);
     const view = await open("gc-unprompted");
     const kept = await driver.newSession();
     await driver.prompt(kept, "ping");

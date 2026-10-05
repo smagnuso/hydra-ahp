@@ -1,10 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, scryptSync } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cwdToUri } from "../../src/bridge/ids.js";
 import { HydraClient } from "../../src/hydra/client.js";
 import { HydraRest } from "../../src/hydra/rest.js";
 
@@ -18,6 +19,9 @@ export const DAEMON_JS = [
   join(homedir(), "dev/hydra-acp/cli/dist/daemon.js"),
 ].find((candidate) => candidate && existsSync(candidate)) ?? "cli/dist/daemon.js";
 export const EXTENSION_JS = join(REPO, "dist", "index.js");
+// A directory every platform has, for sessions that only need some working directory.
+export const WORK_DIR = realpathSync(tmpdir());
+export const WORK_URI = cwdToUri(WORK_DIR);
 export const FAKE_AGENT = join(here, "fake-acp.mjs");
 export const PROBE_EXTENSION = join(here, "probe-extension.mjs");
 

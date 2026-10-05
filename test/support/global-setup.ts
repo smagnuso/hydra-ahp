@@ -7,5 +7,5 @@ export default function setup(): void {
   if (!existsSync(DAEMON_JS)) {
     throw new Error(`Hydra daemon build not found at ${DAEMON_JS}; set HYDRA_CLI_DIST to a built cli/dist/daemon.js`);
   }
-  execFileSync("npx", ["tsup", "--silent"], { cwd: REPO, stdio: "inherit" });
+  execFileSync("npx", ["tsup", "--silent"], { cwd: REPO, stdio: "inherit", shell: process.platform === "win32" });
 }

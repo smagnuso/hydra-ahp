@@ -98,7 +98,7 @@ function plainEdit(path: string, before: string | undefined, after: string): Jso
   if (before === undefined) {
     return {
       type: "fileEdit",
-      after: { uri: `file://${path}`, content: { uri: `file://${path}` } },
+      after: { uri: cwdToUri(path), content: { uri: cwdToUri(path) } },
       diff: { added: countLines(after), removed: 0 },
     };
   }

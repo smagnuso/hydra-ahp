@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Driver } from "../support/driver.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_DIR } from "../support/scratch.js";
 
 // Pins down how the fake agent's write-path scripts behave under a real daemon, with no AHP in the way.
 describe("fake agent write-path scripts", () => {
@@ -67,7 +67,7 @@ describe("fake agent write-path scripts", () => {
   });
 
   it("takes a steer natively into the running turn on the fake-steering agent", async () => {
-    const id = await driver.newSession("/tmp", "fake-steering");
+    const id = await driver.newSession(WORK_DIR, "fake-steering");
     const watcher = await Driver.open(daemon);
     await watcher.attach(id);
     const turn = started(id);

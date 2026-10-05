@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@microsoft/agent-host-protocol";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_DIR } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 const PASSWORD = "scratch-password";
@@ -35,7 +35,7 @@ describe("two scratch daemons, alpha federated to beta", () => {
     betaDriver = await Driver.open(beta);
     host = await alphaDriver.newSession();
     ahp = await connectAhp(alpha, alphaDriver, host);
-    betaSession = await betaDriver.newSession("/tmp");
+    betaSession = await betaDriver.newSession(WORK_DIR);
     await betaDriver.prompt(betaSession, "ping");
     federatedId = `beta:${betaSession}`;
   });
@@ -56,7 +56,7 @@ describe("two scratch daemons, alpha federated to beta", () => {
   });
 
   it("upserts a federated row that appears after the first poll", async () => {
-    const later = await betaDriver.newSession("/tmp");
+    const later = await betaDriver.newSession(WORK_DIR);
     await betaDriver.prompt(later, "ping");
     const row = await until("second federated row", async () => (await list()).find((s) => s.resource === sessionOf(`beta:${later}`)), 20000);
     expect(row).toBeDefined();
@@ -64,7 +64,7 @@ describe("two scratch daemons, alpha federated to beta", () => {
   });
 
   it("drops a federated row when the peer deletes the session", async () => {
-    const doomed = await betaDriver.newSession("/tmp");
+    const doomed = await betaDriver.newSession(WORK_DIR);
     await betaDriver.prompt(doomed, "ping");
     await until("row appears", async () => (await list()).find((s) => s.resource.endsWith(`beta:${doomed}`)), 20000);
     await beta.admin.deleteSession(doomed);

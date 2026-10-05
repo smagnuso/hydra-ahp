@@ -3,7 +3,7 @@ import type { ChatState, SessionState, Snapshot } from "@microsoft/agent-host-pr
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { act, openSession } from "../support/harness.js";
 import { ReducerOracle } from "../support/oracle.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_URI } from "../support/scratch.js";
 import { defaultChatUri } from "../../src/bridge/ids.js";
 
 // Clients such as VS Code create a session under a URI they pick, "<provider>:/<id>", and pipeline their calls.
@@ -36,7 +36,7 @@ describe("a client-created session with a provider-scheme URI", () => {
     await ahp.session.client.request("createSession", {
       channel,
       provider: "fake",
-      workingDirectories: ["file:///tmp"],
+      workingDirectories: [WORK_URI],
     } as never);
     const sub = await ahp.session.client.subscribe(channel);
     const state = sub.result.snapshot?.state as SessionState;
@@ -72,7 +72,7 @@ describe("a client-created session with a provider-scheme URI", () => {
   it("runs a turn dispatched before the new session is ready and streams it to a chat subscribed during creation", async () => {
     const early = "fake:/0b8e6c55-3c1e-4d0a-8d57-5a0f2a3b7c21";
     const chat = defaultChatUri(early);
-    await ahp.session.client.request("createSession", { channel: early, provider: "fake", workingDirectories: ["file:///tmp"] } as never);
+    await ahp.session.client.request("createSession", { channel: early, provider: "fake", workingDirectories: [WORK_URI] } as never);
     const oracle = new ReducerOracle();
     oracle.applySnapshot((await ahp.session.client.subscribe(early)).result.snapshot as Snapshot);
     oracle.applySnapshot((await ahp.session.client.subscribe(chat)).result.snapshot as Snapshot);

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@microsoft/agent-host-protocol";
 import { openSession } from "../support/harness.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
-import { ScratchDaemon, until } from "../support/scratch.js";
+import { ScratchDaemon, until, WORK_DIR, WORK_URI } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
 
 async function list(ahp: AhpConnection, params: Record<string, unknown> = {}) {
@@ -56,7 +56,7 @@ describe("one scratch daemon", () => {
 
   it("does not list sessions that were never prompted, even though the poll sees them", async () => {
     const result = await driver.client.request<{ sessionId: string }>("session/new", {
-      cwd: "/tmp",
+      cwd: WORK_DIR,
       mcpServers: [],
       _meta: { "hydra-acp": { interactive: false } },
     });
@@ -71,7 +71,7 @@ describe("one scratch daemon", () => {
     await driver.prompt(id, "ping");
     await until("session listed", async () => (await list(ahp)).items.some((s) => s.resource.endsWith(id)));
     const listed = (await list(ahp)).items.find((s) => s.resource.endsWith(id));
-    expect(listed?.workingDirectories).toEqual(["file:///tmp"]);
+    expect(listed?.workingDirectories).toEqual([WORK_URI]);
   });
 
   it("pages listSessions newest first without repeats", async () => {
@@ -107,7 +107,7 @@ describe("one scratch daemon", () => {
       await ahp.session.client.request("createSession", {
         channel,
         provider: "fake",
-        workingDirectories: ["file:///tmp"],
+        workingDirectories: [WORK_URI],
       } as never);
       const sub = await ahp.session.client.subscribe(channel);
       const state = sub.result.snapshot?.state as { lifecycle: string };
@@ -116,7 +116,7 @@ describe("one scratch daemon", () => {
       }
       const created = await until("hydra session", async () => {
         const page = await daemon.admin.listSessions({ includeNonInteractive: true });
-        return page.sessions.find((s) => !before.has(s.sessionId) && s.cwd === "/tmp" && s.agentId === "fake");
+        return page.sessions.find((s) => !before.has(s.sessionId) && s.cwd === WORK_DIR && s.agentId === "fake");
       });
       expect(created.interactive).not.toBe(true);
       const listed = (await list(ahp)).items.find((s) => s.resource === channel);

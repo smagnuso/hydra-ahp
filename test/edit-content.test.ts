@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ChatMapper, type Frame } from "../src/bridge/mapping.js";
 import { EditContentStore, editContentUri } from "../src/bridge/edit-content.js";
+import { cwdToUri } from "../src/bridge/ids.js";
 
 const CHAT = "ahp-chat://default/abc";
 let tick = 1_000;
@@ -29,8 +30,8 @@ describe("edits in tool results", () => {
     expect(content).toEqual([
       {
         type: "fileEdit",
-        before: { uri: "file:///r/a.ts", content: { uri: before } },
-        after: { uri: "file:///r/a.ts", content: { uri: after } },
+        before: { uri: cwdToUri("/r/a.ts"), content: { uri: before } },
+        after: { uri: cwdToUri("/r/a.ts"), content: { uri: after } },
         diff: { added: 1, removed: 0 },
       },
     ]);
@@ -45,7 +46,7 @@ describe("edits in tool results", () => {
       status: "completed",
       content: [{ type: "diff", path: "/r/new.ts", oldText: null, newText: "a\nb" }],
     }).content[0];
-    expect(created).toMatchObject({ after: { uri: "file:///r/new.ts" }, diff: { added: 2, removed: 0 } });
+    expect(created).toMatchObject({ after: { uri: cwdToUri("/r/new.ts") }, diff: { added: 2, removed: 0 } });
     expect(created?.before).toBeUndefined();
     const edited = mapped({
       sessionUpdate: "tool_call",
@@ -82,7 +83,7 @@ describe("multi-file patches", () => {
     expect(store.read(editContentUri(CHAT, "tc5", 0, "old"), undefined)).toMatchObject({ data: "keep\nold\n" });
     expect(store.read(editContentUri(CHAT, "tc5", 0, "new"), undefined)).toMatchObject({ data: "keep\nnew\nmore\n" });
     expect(content[1]?.before).toBeUndefined();
-    expect(content[1]).toMatchObject({ after: { uri: "file:///r/b.ts" }, diff: { added: 1, removed: 0 } });
+    expect(content[1]).toMatchObject({ after: { uri: cwdToUri("/r/b.ts") }, diff: { added: 1, removed: 0 } });
   });
 });
 
@@ -104,7 +105,7 @@ describe("edits awaiting confirmation", () => {
     const after = editContentUri(CHAT, "tc4", 0, "new");
     expect(actions.find((a) => a.type === "chat/toolCallReady")).toMatchObject({
       invocationMessage: "Write new.ts",
-      edits: { items: [{ after: { uri: "file:///r/new.ts", content: { uri: after } }, diff: { added: 2, removed: 0 } }] },
+      edits: { items: [{ after: { uri: cwdToUri("/r/new.ts"), content: { uri: after } }, diff: { added: 2, removed: 0 } }] },
     });
     expect(store.read(after, undefined)).toMatchObject({ data: "a\nb" });
   });

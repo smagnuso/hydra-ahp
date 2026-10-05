@@ -200,7 +200,7 @@ export async function startBridgeHarness(
         editsEveryMs: changesetPollMs,
       })
     : undefined;
-  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ shell: "/bin/sh", orphanGraceMs: 200 }), ...(changesets ? { changesets } : {}), ...backendOptions });
+  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ ...(process.platform === "win32" ? {} : { shell: "/bin/sh" }), orphanGraceMs: 200 }), ...(changesets ? { changesets } : {}), ...backendOptions });
   const core = new ProtocolCore({ backend });
   await core.start();
   const listener = new AhpListener({ core, tokens });
