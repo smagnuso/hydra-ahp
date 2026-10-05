@@ -70,6 +70,8 @@ interface Channel {
   kind: ChannelKind;
   state: ChannelState;
   createdSeq: number;
+  // The session that last changed this chat's summary; a client not subscribed to it never saw the change.
+  summaryFrom?: string;
 }
 
 export type ReplayResult =
@@ -158,7 +160,7 @@ export class ChannelStore {
       throw new Error(`unknown channel: ${uri}`);
     }
     channel.state = reduce(channel.kind, channel.state, action);
-    this.mirrorChatSummary(action);
+    this.mirrorChatSummary(uri, action);
     this.seq += 1;
     const envelope: ActionEnvelope = { channel: uri, action, serverSeq: this.seq, origin };
     this.ring.push(envelope);
@@ -172,7 +174,7 @@ export class ChannelStore {
   }
 
   // A chat's state repeats its summary's fields, so a summary change announced on the session reaches the chat's snapshot too.
-  private mirrorChatSummary(action: StateAction): void {
+  private mirrorChatSummary(session: string, action: StateAction): void {
     if (action.type !== "session/chatUpdated") {
       return;
     }
@@ -188,6 +190,7 @@ export class ChannelStore {
     chat.state = { ...(chat.state as ChatState), ...changes };
     // No chat-channel action records this, so a client that last saw the chat before it must reconnect to a snapshot.
     chat.createdSeq = this.seq + 1;
+    chat.summaryFrom = session;
   }
 
   // Replays only when the ring still covers the gap and no channel was recreated since.
@@ -195,11 +198,15 @@ export class ChannelStore {
     const missing = subscriptions.filter((uri) => !this.channels.has(uri));
     const live = subscriptions.filter((uri) => this.channels.has(uri));
     const covered = lastSeen >= this.floor && lastSeen <= this.seq;
+    const wanted = new Set(live);
     const recreated = live.some((uri) => (this.channels.get(uri)?.createdSeq ?? 0) > lastSeen);
-    if (!covered || recreated) {
+    const unseenSummary = live.some((uri) => {
+      const from = this.channels.get(uri)?.summaryFrom;
+      return from !== undefined && !wanted.has(from);
+    });
+    if (!covered || recreated || unseenSummary) {
       return { type: "snapshot" };
     }
-    const wanted = new Set(live);
     const actions = this.ring.filter(
       (envelope) => envelope.serverSeq > lastSeen && wanted.has(envelope.channel),
     );

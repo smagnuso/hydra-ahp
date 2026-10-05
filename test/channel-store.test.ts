@@ -26,8 +26,8 @@ describe("a chat summary change announced on the session", () => {
     const channels = store();
     const before = channels.serverSeq;
     channels.apply(SESSION, rename("New"));
-    expect(channels.replay(before, [CHAT]).type).toBe("snapshot");
-    expect(channels.replay(channels.serverSeq, [CHAT]).type).toBe("replay");
+    expect(channels.replay(before, [SESSION, CHAT]).type).toBe("snapshot");
+    expect(channels.replay(channels.serverSeq, [SESSION, CHAT]).type).toBe("replay");
   });
 
   it("leaves the replay baseline alone when nothing changed", () => {
@@ -35,5 +35,13 @@ describe("a chat summary change announced on the session", () => {
     const before = channels.serverSeq;
     channels.apply(SESSION, rename("Old"));
     expect(channels.replay(before, [CHAT]).type).toBe("replay");
+  });
+
+  it("sends a client watching only the chat to a snapshot even when it saw later chat actions", () => {
+    const channels = store();
+    channels.apply(SESSION, rename("New"));
+    channels.apply(CHAT, { type: "chat/isReadChanged", isRead: true } as never);
+    expect(channels.replay(channels.serverSeq, [CHAT]).type).toBe("snapshot");
+    expect(channels.replay(channels.serverSeq, [SESSION, CHAT]).type).toBe("replay");
   });
 });
