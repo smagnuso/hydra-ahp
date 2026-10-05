@@ -361,6 +361,8 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     harness.hydra.rows = [ROW({ title: "Renamed in Hydra", updatedAt: "2026-10-05T01:00:00.000Z" })];
     await sleep(300);
     expect((harness.core.store.state(SESSION) as SessionState).title).toBe("Renamed in Hydra");
+    expect((harness.core.store.state(SESSION) as SessionState).chats.find((chat) => chat.resource === CHAT)?.title).toBe("Renamed in Hydra");
+    expect((harness.core.store.state(CHAT) as { title: string }).title).toBe("Renamed in Hydra");
   });
 });
 

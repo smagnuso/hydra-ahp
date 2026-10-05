@@ -180,8 +180,14 @@ export class ChannelStore {
     if (chat?.kind !== "chat") {
       return;
     }
-    const { resource: _resource, ...changes } = action.changes as { resource?: string };
+    const { resource: _resource, ...changes } = action.changes as { resource?: string } & Record<string, unknown>;
+    const held = chat.state as unknown as Record<string, unknown>;
+    if (Object.entries(changes).every(([key, value]) => held[key] === value)) {
+      return;
+    }
     chat.state = { ...(chat.state as ChatState), ...changes };
+    // No chat-channel action records this, so a client that last saw the chat before it must reconnect to a snapshot.
+    chat.createdSeq = this.seq + 1;
   }
 
   // Replays only when the ring still covers the gap and no channel was recreated since.

@@ -192,6 +192,13 @@ export class HydraBackend implements Backend {
       if (summary && state && summary.title !== UNTITLED && state.title !== summary.title) {
         this.core.publish(uri, action({ type: "session/titleChanged", title: summary.title }));
       }
+      // VS Code titles a chat's tab from its chat state, which only session/chatUpdated naming the chat changes.
+      for (const chat of summary?.chats ?? []) {
+        const held = state?.chats.find((entry) => entry.resource === chat.resource);
+        if (held && chat.title && chat.title !== UNTITLED && held.title !== chat.title) {
+          this.core.publish(uri, action({ type: "session/chatUpdated", chat: chat.resource, changes: { title: chat.title } }));
+        }
+      }
     }
   }
 
