@@ -178,6 +178,7 @@ export class TerminalService {
   }
 
   private create(channel: string, body: Record<string, unknown>, client: ClientContext): void {
+    this.detachGone(channel);
     if (this.terminals.has(channel) || this.core.store.has(channel)) {
       throw new RpcError(ErrorCodes.InvalidParams, "terminal already exists");
     }
