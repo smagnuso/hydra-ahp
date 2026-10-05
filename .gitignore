@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.env
+.npmrc
+.claude/
+pnpm-lock.yaml
+pnpm-workspace.yaml

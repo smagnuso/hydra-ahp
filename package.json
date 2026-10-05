@@ -1,0 +1,55 @@
+{
+  "name": "@hydra-acp/ahp",
+  "version": "0.1.0",
+  "description": "Serve Hydra sessions to Agent Host Protocol (AHP) clients such as VS Code.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://github.com/smagnuso/hydra-ahp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/smagnuso/hydra-ahp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/smagnuso/hydra-ahp/issues"
+  },
+  "keywords": [
+    "acp",
+    "ahp",
+    "hydra-acp",
+    "agent-host-protocol",
+    "vscode",
+    "claude",
+    "codex"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "dist/index.js",
+  "bin": {
+    "hydra-ahp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "watch": "tsup --watch",
+    "start": "node dist/index.js",
+    "dev": "tsup && node dist/index.js",
+    "test": "vitest run",
+    "lint": "tsc -p . --noEmit",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.0.0"
+  }
+}
