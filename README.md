@@ -9,7 +9,7 @@ Start a turn in the TUI and watch it stream in VS Code, answer its permission
 prompt from either side, or start a new session in VS Code and pick it up later
 from the terminal.
 
-VS Code authenticates with a token this extension mints for it. Hydra's own
+VS Code authenticates with a token this extension mints for it and Hydra's own
 tokens never leave the daemon.
 
 ## Install
