@@ -5,10 +5,10 @@ import type { Frame } from "../src/bridge/mapping.js";
 import { ReducerOracle, framesFromNotifications, framesFromHistory, type HistoryRow, type RecordedFrame } from "./support/oracle.js";
 import { ROW, startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 import { act, sleep, type Session } from "./support/harness.js";
-import { chatOf } from "./support/chat-uri.js";
+import { chatOf, sessionOf } from "./support/chat-uri.js";
 
 const CHAT = chatOf("h1");
-const SESSION = "ahp-session:/h1";
+const SESSION = sessionOf("h1");
 const ROOT = "ahp-root://";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/scripted.json", import.meta.url), "utf8")) as {

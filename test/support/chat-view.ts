@@ -11,7 +11,7 @@ import type { AhpConnection } from "./driver.js";
 import { act } from "./harness.js";
 import { ReducerOracle } from "./oracle.js";
 import { until } from "./scratch.js";
-import { chatOf } from "./chat-uri.js";
+import { chatOf, sessionOf } from "./chat-uri.js";
 
 // Scenario tests land before the code they cover; HYDRA_AHP_RUN_PENDING=T10,T11 (or "all") runs them anyway.
 export function runsPending(task: string): boolean {
@@ -31,24 +31,25 @@ export class ChatView {
     readonly ahp: AhpConnection,
     readonly id: string,
     private readonly oracle: ReducerOracle,
+    readonly agent = "fake",
   ) {
   }
 
-  static async open(ahp: AhpConnection, id: string): Promise<ChatView> {
+  static async open(ahp: AhpConnection, id: string, agent = "fake"): Promise<ChatView> {
     const oracle = new ReducerOracle();
-    const session = await ahp.session.client.subscribe(`ahp-session:/${id}`);
+    const session = await ahp.session.client.subscribe(sessionOf(id, agent));
     oracle.applySnapshot(session.result.snapshot as Snapshot);
-    const chat = await ahp.session.client.subscribe(chatOf(id));
+    const chat = await ahp.session.client.subscribe(chatOf(id, agent));
     oracle.applySnapshot(chat.result.snapshot as Snapshot);
-    return new ChatView(ahp, id, oracle);
+    return new ChatView(ahp, id, oracle, agent);
   }
 
   get chatUri(): string {
-    return chatOf(this.id);
+    return chatOf(this.id, this.agent);
   }
 
   get sessionUri(): string {
-    return `ahp-session:/${this.id}`;
+    return sessionOf(this.id, this.agent);
   }
 
   chat(): ChatState {

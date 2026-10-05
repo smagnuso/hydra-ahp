@@ -6,6 +6,7 @@ import { ChatView } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { openSession } from "../support/harness.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
+import { sessionOf } from "../support/chat-uri.js";
 
 describe("model lists learned from sessions against a scratch daemon", () => {
   let daemon: ScratchDaemon;
@@ -39,9 +40,9 @@ describe("model lists learned from sessions against a scratch daemon", () => {
       const result = (await ahp.session.client.request("listSessions", { channel: ROOT } as never)) as unknown as {
         items: Array<{ resource: string }>;
       };
-      return result.items.some((item) => item.resource === `ahp-session:/${id}`) ? true : undefined;
+      return result.items.some((item) => item.resource === sessionOf(id, "fake-models")) ? true : undefined;
     });
-    const view = await ChatView.open(ahp, id);
+    const view = await ChatView.open(ahp, id, "fake-models");
     const changed = await ahp.session.waitFor((e) => e.channel === ROOT && e.action.type === "root/agentsChanged", 8000);
     const agents = (changed.action as unknown as { agents: RootState["agents"] }).agents;
     const known = agents.find((agent) => agent.provider === "fake-models");

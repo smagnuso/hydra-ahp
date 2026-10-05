@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultChatUri, sessionOfDefaultChat } from "../src/bridge/ids.js";
+import { defaultChatUri, providerSessionUri, sessionOfDefaultChat } from "../src/bridge/ids.js";
 
 describe("default chat URIs", () => {
   it("match what VS Code derives for a session", () => {
@@ -17,5 +17,13 @@ describe("default chat URIs", () => {
   it("leave other chat URIs alone", () => {
     expect(sessionOfDefaultChat("ahp-chat:/abc")).toBeUndefined();
     expect(sessionOfDefaultChat("ahp-chat://default/")).toBeUndefined();
+  });
+});
+
+describe("provider session URIs", () => {
+  it("use the agent as the scheme, which is how VS Code finds the provider", () => {
+    expect(providerSessionUri("claude-personal", "hydra_session_abc")).toBe("claude-personal:/hydra_session_abc");
+    expect(providerSessionUri("peer:agent", "x")).toBe("ahp-session:/x");
+    expect(providerSessionUri(undefined, "x")).toBe("ahp-session:/x");
   });
 });

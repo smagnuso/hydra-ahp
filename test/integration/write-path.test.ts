@@ -7,6 +7,7 @@ import { ChatView, markdown, user } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { openSession } from "../support/harness.js";
 import { ScratchDaemon, sleep, until } from "../support/scratch.js";
+import { sessionOf } from "../support/chat-uri.js";
 
 describe("write path against a scratch daemon", () => {
   let daemon: ScratchDaemon;
@@ -38,19 +39,19 @@ describe("write path against a scratch daemon", () => {
     rmSync(gates, { recursive: true, force: true });
   });
 
-  async function listed(id: string): Promise<boolean> {
+  async function listed(id: string, agent = "fake"): Promise<boolean> {
     const result = (await ahp.session.client.request("listSessions", { channel: ROOT } as never)) as unknown as {
       items: Array<{ resource: string }>;
     };
-    return result.items.some((item) => item.resource === `ahp-session:/${id}`);
+    return result.items.some((item) => item.resource === sessionOf(id, agent));
   }
 
   // A session the driver created and prompted once, so Hydra lists it, opened in AHP.
   async function open(agentId?: string): Promise<ChatView> {
     const id = await driver.newSession("/tmp", agentId);
     await driver.prompt(id, "ping");
-    await until("session listed", () => listed(id));
-    const view = await ChatView.open(ahp, id);
+    await until("session listed", () => listed(id, agentId ?? "fake"));
+    const view = await ChatView.open(ahp, id, agentId ?? "fake");
     views.push(view);
     return view;
   }

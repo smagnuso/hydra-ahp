@@ -5,7 +5,7 @@ import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.
 import { act, openSession, type Session } from "../support/harness.js";
 import { ReducerOracle } from "../support/oracle.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
-import { chatOf } from "../support/chat-uri.js";
+import { chatOf, sessionOf } from "../support/chat-uri.js";
 
 describe("agent-initiated turns and attach mid-turn against a scratch daemon", () => {
   let daemon: ScratchDaemon;
@@ -37,7 +37,7 @@ describe("agent-initiated turns and attach mid-turn against a scratch daemon", (
     const result = (await ahp.session.client.request("listSessions", { channel: ROOT } as never)) as unknown as {
       items: Array<{ resource: string }>;
     };
-    return result.items.some((item) => item.resource === `ahp-session:/${id}`);
+    return result.items.some((item) => item.resource === sessionOf(id));
   }
 
   async function prompted(): Promise<string> {
@@ -170,7 +170,7 @@ class Reconnecting {
     const session = await openSession(`ws://127.0.0.1:${daemon.ahpPort}/?tkn=${encodeURIComponent(token)}`);
     const client = new Reconnecting(daemon, token, session);
     await session.client.initialize({ clientId: client.clientId, protocolVersions: ["0.9.0"], initialSubscriptions: [ROOT] });
-    for (const uri of [`ahp-session:/${id}`, chatOf(id)]) {
+    for (const uri of [sessionOf(id), chatOf(id)]) {
       client.oracle.applySnapshot((await session.client.subscribe(uri)).result.snapshot as Snapshot);
     }
     return client;
@@ -377,7 +377,7 @@ describe("idle close and session GC against a scratch daemon", () => {
   });
 
   it("drops a never-prompted session the GC collected while subscribed, and keeps prompted ones", async () => {
-    const channel = "ahp-session:/gc-unprompted";
+    const channel = sessionOf("gc-unprompted");
     await ahp.session.client.request("createSession", { channel, provider: "fake", workingDirectories: ["file:///tmp"] } as never);
     const view = await open("gc-unprompted");
     const kept = await driver.newSession();
@@ -390,7 +390,7 @@ describe("idle close and session GC against a scratch daemon", () => {
     );
     expect(await listed(channel)).toBe(false);
     await expect(ahp.session.client.subscribe(view.chatUri)).rejects.toMatchObject({ code: -32001 });
-    expect(await listed(`ahp-session:/${kept}`)).toBe(true);
+    expect(await listed(sessionOf(kept))).toBe(true);
     expect((await daemon.admin.getSession(kept)).status).toBe("cold");
   });
 });

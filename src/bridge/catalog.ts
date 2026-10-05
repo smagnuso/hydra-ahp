@@ -5,7 +5,7 @@ import type { ExtensionState } from "../hydra/ext-state.js";
 import type { HydraAgent, HydraRest, HydraSessionEntry, SessionPage } from "../hydra/rest.js";
 import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
-import { chatKey, defaultChatUri, isChatUri, isFederatedId, isNativeSessionUri, sessionOfDefaultChat, sessionUri } from "./ids.js";
+import { chatKey, defaultChatUri, isChatUri, isFederatedId, providerSessionUri, sessionOfDefaultChat, sessionUri } from "./ids.js";
 import { NO_FLAGS, type FlagStore, type SessionFlags } from "../store/flags.js";
 import type { ConfigStore } from "../store/configs.js";
 import type { KnownModel, ModelStore } from "../store/models.js";
@@ -116,9 +116,9 @@ export class Catalog {
     return this.agentList.some((agent) => agent.provider === provider);
   }
 
-  // The AHP session a Hydra session belongs to: its stamp, or "ahp-session:/<id>" for one the extension did not create.
+  // The AHP session a Hydra session belongs to: its stamp, or "<agent>:/<id>" for one the extension did not create.
   groupOf(hydraId: string): string {
-    return this.stamps.get(hydraId) ?? sessionUri(hydraId);
+    return this.stamps.get(hydraId) ?? providerSessionUri(this.entries.get(hydraId)?.agentId, hydraId);
   }
 
   uriFor(hydraId: string): string {

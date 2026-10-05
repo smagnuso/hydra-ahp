@@ -3,6 +3,7 @@ import type { SessionState } from "@microsoft/agent-host-protocol";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { act } from "../support/harness.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
+import { sessionOf } from "../support/chat-uri.js";
 
 describe("an agent's config options as session settings against a scratch daemon", () => {
   let daemon: ScratchDaemon;
@@ -24,7 +25,7 @@ describe("an agent's config options as session settings against a scratch daemon
   async function prompted(agent: string): Promise<{ id: string; uri: string }> {
     const id = await driver.newSession("/tmp", agent);
     await driver.prompt(id, "ping");
-    const uri = `ahp-session:/${id}`;
+    const uri = sessionOf(id, agent);
     await until("session listed", async () => {
       const result = (await ahp.session.client.request("listSessions", { channel: ROOT } as never)) as unknown as {
         items: Array<{ resource: string }>;

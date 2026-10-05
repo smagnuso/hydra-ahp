@@ -3,6 +3,7 @@ import type { SessionSummary } from "@microsoft/agent-host-protocol";
 import { openSession } from "../support/harness.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
+import { sessionOf } from "../support/chat-uri.js";
 
 async function list(ahp: AhpConnection, params: Record<string, unknown> = {}) {
   return (await ahp.session.client.request("listSessions", { channel: ROOT, ...params } as never)) as unknown as {
@@ -39,16 +40,16 @@ describe("one scratch daemon", () => {
   it("lists a session only once it has had a real turn", async () => {
     const id = await driver.newSession();
     await new Promise((r) => setTimeout(r, 900));
-    expect((await list(ahp)).items.some((s) => s.resource === `ahp-session:/${id}`)).toBe(false);
+    expect((await list(ahp)).items.some((s) => s.resource === sessionOf(id))).toBe(false);
 
     const added = until("sessionAdded", () =>
       ahp.session.notifications.find(
-        (n) => n.method === "root/sessionAdded" && (n.params as { summary: SessionSummary }).summary.resource === `ahp-session:/${id}`,
+        (n) => n.method === "root/sessionAdded" && (n.params as { summary: SessionSummary }).summary.resource === sessionOf(id),
       ),
     );
     expect(await driver.prompt(id, "ping")).toBe("pong");
     await added;
-    const summary = (await list(ahp)).items.find((s) => s.resource === `ahp-session:/${id}`);
+    const summary = (await list(ahp)).items.find((s) => s.resource === sessionOf(id));
     expect(summary?.provider).toBe("fake");
     expect(summary?.status).toBe(1);
   });

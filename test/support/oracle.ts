@@ -1,3 +1,4 @@
+import { channelKind } from "../../src/protocol/channels.js";
 import {
   chatReducer,
   rootReducer,
@@ -16,10 +17,7 @@ function reducerFor(channel: string): Reducer {
   if (channel === "ahp-root://") {
     return rootReducer as Reducer;
   }
-  if (channel.startsWith("ahp-session:")) {
-    return sessionReducer as Reducer;
-  }
-  return chatReducer as Reducer;
+  return channelKind(channel) === "session" ? (sessionReducer as Reducer) : (chatReducer as Reducer);
 }
 
 // Rebuilds channel state purely from snapshots and envelopes via the official reducers.

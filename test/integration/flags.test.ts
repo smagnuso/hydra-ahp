@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ChatView } from "../support/chat-view.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
+import { sessionOf } from "../support/chat-uri.js";
 
 const IS_READ = 32;
 const IS_ARCHIVED = 64;
@@ -29,7 +30,7 @@ describe("read and archive marks against a scratch daemon", () => {
     const result = (await ahp.session.client.request("listSessions", { channel: ROOT } as never)) as unknown as {
       items: Array<{ resource: string; status: number }>;
     };
-    return result.items.find((item) => item.resource === `ahp-session:/${id}`)?.status;
+    return result.items.find((item) => item.resource === sessionOf(id))?.status;
   }
 
   async function opened(): Promise<{ id: string; view: ChatView }> {

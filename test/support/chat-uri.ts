@@ -1,6 +1,11 @@
 import { defaultChatUri } from "../../src/bridge/ids.js";
 
-// The default chat of a native session, addressed the way VS Code does.
-export function chatOf(hydraId: string): string {
-  return defaultChatUri(`ahp-session:/${hydraId}`);
+// A native session as VS Code addresses it: the scheme is the agent provider.
+export function sessionOf(hydraId: string, agent = "fake"): string {
+  return `${agent}:/${hydraId}`;
+}
+
+// The default chat of that session.
+export function chatOf(hydraId: string, agent = "fake"): string {
+  return defaultChatUri(sessionOf(hydraId, agent));
 }

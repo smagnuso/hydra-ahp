@@ -4,13 +4,13 @@ import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.
 import { ReducerOracle } from "../support/oracle.js";
 import { openSession } from "../support/harness.js";
 import { ScratchDaemon, sleep, until } from "../support/scratch.js";
-import { chatOf } from "../support/chat-uri.js";
+import { chatOf, sessionOf } from "../support/chat-uri.js";
 
 async function listed(ahp: AhpConnection, id: string): Promise<boolean> {
   const result = (await ahp.session.client.request("listSessions", { channel: ROOT } as never)) as unknown as {
     items: Array<{ resource: string }>;
   };
-  return result.items.some((item) => item.resource === `ahp-session:/${id}`);
+  return result.items.some((item) => item.resource === sessionOf(id));
 }
 
 describe("read path against a scratch daemon", () => {
@@ -39,7 +39,7 @@ describe("read path against a scratch daemon", () => {
 
   async function subscribe(id: string): Promise<{ oracle: ReducerOracle; chat: ChatState }> {
     const oracle = new ReducerOracle();
-    const session = await ahp.session.client.subscribe(`ahp-session:/${id}`);
+    const session = await ahp.session.client.subscribe(sessionOf(id));
     oracle.applySnapshot(session.result.snapshot as Snapshot);
     const chat = await ahp.session.client.subscribe(chatOf(id));
     oracle.applySnapshot(chat.result.snapshot as Snapshot);
@@ -65,7 +65,7 @@ describe("read path against a scratch daemon", () => {
   it("accepts a client registering as the session's active client and drops it on unsubscribe", async () => {
     const id = await prompted("ping");
     await subscribe(id);
-    const sessionUri = `ahp-session:/${id}`;
+    const sessionUri = sessionOf(id);
     const { clientSeq } = ahp.session.client.dispatch(sessionUri, {
       type: "session/activeClientSet",
       activeClient: { clientId: ahp.clientId, displayName: "tester", tools: [] },
@@ -121,7 +121,7 @@ describe("read path against a scratch daemon", () => {
 
   it("serves the current activity from a session channel nobody was watching", async () => {
     const id = await prompted("ping");
-    const uri = `ahp-session:/${id}`;
+    const uri = sessionOf(id);
     const statusNow = async (): Promise<number> => {
       const sub = await ahp.session.client.subscribe(uri);
       const status = (sub.result.snapshot as Snapshot).state as SessionState;

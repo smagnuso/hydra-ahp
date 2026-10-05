@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@microsoft/agent-host-protocol";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
+import { sessionOf } from "../support/chat-uri.js";
 
 const PASSWORD = "scratch-password";
 
@@ -48,7 +49,7 @@ describe("two scratch daemons, alpha federated to beta", () => {
   });
 
   it("lists the peer's sessions under name:localId with the remote as label", async () => {
-    const summary = await until("federated row", async () => (await list()).find((s) => s.resource === `ahp-session:/${federatedId}`), 20000);
+    const summary = await until("federated row", async () => (await list()).find((s) => s.resource === sessionOf(federatedId)), 20000);
     expect(summary.provider).toBe("fake");
     expect((summary as unknown as { project?: { displayName: string } }).project?.displayName).toBe("beta");
     expect(summary.workingDirectories).toBeUndefined();
@@ -57,7 +58,7 @@ describe("two scratch daemons, alpha federated to beta", () => {
   it("upserts a federated row that appears after the first poll", async () => {
     const later = await betaDriver.newSession("/tmp");
     await betaDriver.prompt(later, "ping");
-    const row = await until("second federated row", async () => (await list()).find((s) => s.resource === `ahp-session:/beta:${later}`), 20000);
+    const row = await until("second federated row", async () => (await list()).find((s) => s.resource === sessionOf(`beta:${later}`)), 20000);
     expect(row).toBeDefined();
     expect(ahp.session.notifications.some((n) => n.method === "root/sessionAdded" && (n.params as { summary: SessionSummary }).summary.resource.endsWith(`beta:${later}`))).toBe(true);
   });

@@ -12,6 +12,13 @@ export function chatUri(id: string): string {
   return `${CHAT_PREFIX}${id}`;
 }
 
+const SCHEME_NAME = /^[a-z][a-z0-9+.-]*$/i;
+
+// VS Code takes a session URI's scheme to be the agent provider, and finds no content provider for any other, so a session lives at <agent>:/<id>.
+export function providerSessionUri(provider: string | undefined, id: string): string {
+  return provider && SCHEME_NAME.test(provider) ? `${provider}:/${id}` : sessionUri(id);
+}
+
 const DEFAULT_CHAT_PREFIX = "ahp-chat://default/";
 
 // VS Code addresses a session's default chat as ahp-chat://default/<base64url of the session URI>, whatever the session state lists.
