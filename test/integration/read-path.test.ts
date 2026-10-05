@@ -205,7 +205,8 @@ describe("read path against a scratch daemon", () => {
       await other.shutdown();
     }
     await turn;
-    await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete");
+    // The agent is done when its prompt resolves, but the extension can still be mapping the flood behind it.
+    await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete", 20_000);
     await sleep(200);
     for (const envelope of ahp.session.events) {
       oracle.applyEnvelope(envelope);
