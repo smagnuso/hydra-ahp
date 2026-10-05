@@ -148,10 +148,71 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
 
     const cancelled = dispatch(session, { type: "chat/turnCancelled", turnId: "a1", duration: 1 });
     await sleep(50);
+    // The new turn's start retries the steer, which the cancel waits out too.
+    harness.hydra.sessions.steer = async () => ({ outcome: "promptRequired" });
     reply({ outcome: "promptRequired" });
     expect((await cancelled).rejectionReason).toBeDefined();
     await sleep(50);
     expect(harness.hydra.writes.map((write) => write.method)).not.toContain("session/cancel");
+  });
+
+  it("waits out a steer retried as the first one settles before deciding a cancel", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open();
+    hydra(agentStarted("a1"), 1_000);
+    await session.waitFor((envelope) => envelope.action.type === "chat/turnStarted");
+    const replies: Array<(result: { outcome: string }) => void> = [];
+    harness.hydra.sessions.steer = () =>
+      new Promise((resolve) => {
+        replies.push(resolve as (result: { outcome: string }) => void);
+      });
+    await dispatch(session, {
+      type: "chat/pendingMessageSet",
+      kind: "steering",
+      id: "s1",
+      message: { text: "change course", origin: { kind: "user" } },
+    });
+    const cancelled = dispatch(session, { type: "chat/turnCancelled", turnId: "a1", duration: 1 });
+    // Past the retry interval, the held chunk's delivery steers again and so holds again.
+    await sleep(600);
+    hydra(said("still going"), 1_100);
+    replies[0]!({ outcome: "promptRequired" });
+    await sleep(50);
+    expect(replies).toHaveLength(2);
+    hydra(agentEnded("a1", 400), 1_400);
+    hydra(agentStarted("a2"), 1_500);
+    await sleep(50);
+    expect(harness.hydra.writes.map((write) => write.method)).not.toContain("session/cancel");
+    harness.hydra.sessions.steer = async () => ({ outcome: "promptRequired" });
+    replies[1]!({ outcome: "promptRequired" });
+    expect((await cancelled).rejectionReason).toBeDefined();
+    await sleep(50);
+    expect(harness.hydra.writes.map((write) => write.method)).not.toContain("session/cancel");
+  });
+
+  it("stays attached until a steer sent just before the client left has settled", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open();
+    hydra(agentStarted("a1"), 1_000);
+    await session.waitFor((envelope) => envelope.action.type === "chat/turnStarted");
+    let reply = (_result: { outcome: string }): void => undefined;
+    harness.hydra.sessions.steer = () =>
+      new Promise((resolve) => {
+        reply = resolve as typeof reply;
+      });
+    await dispatch(session, {
+      type: "chat/pendingMessageSet",
+      kind: "steering",
+      id: "s1",
+      message: { text: "change course", origin: { kind: "user" } },
+    });
+    await session.client.unsubscribe(CHAT);
+    await session.client.unsubscribe(SESSION);
+    await sleep(100);
+    expect(harness.hydra.detaches).toEqual([]);
+    reply({ outcome: "injected" });
+    await sleep(100);
+    expect(harness.hydra.detaches).toEqual(["h1"]);
   });
 
   it("stays attached until a prompt sent just before the client left has run", async () => {

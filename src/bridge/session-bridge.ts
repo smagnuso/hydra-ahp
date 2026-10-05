@@ -825,7 +825,10 @@ export class SessionBridge implements SessionListener {
 
   private async decide(channel: string, next: StateAction): Promise<ActionDecision> {
     // A held turn end or start would make this decision on a stale turn: a cancel could reach the turn after it.
-    await this.steerHold?.released;
+    // Releasing one hold can start another steer, and so another hold, before this resumes.
+    while (this.steerHold) {
+      await this.steerHold.released;
+    }
     const body = next as unknown as Json;
     if (channel === this.deps.sessionUri) {
       if (next.type === "session/titleChanged") {
@@ -1217,10 +1220,15 @@ export class SessionBridge implements SessionListener {
     });
   }
 
+  // Every way a send ends comes through here, so a detach deferred for it is retried here.
   private dropSend(entry: OwnEntry): void {
     const index = this.sends.indexOf(entry);
     if (index >= 0) {
       this.sends.splice(index, 1);
+    }
+    if (this.detachWhenSettled && this.sends.length === 0) {
+      this.detachWhenSettled = false;
+      void this.detach().catch((err) => log.debug(`detach ${this.deps.hydraId} after its prompts failed`, message(err)));
     }
   }
 
@@ -1294,10 +1302,6 @@ export class SessionBridge implements SessionListener {
   // The session/prompt answer is the only end this client hears of its own turn; Hydra leaves it out of turn_complete.
   private settled(entry: OwnEntry, result: unknown, error: Error | undefined, sink: (actions: Json[]) => void): void {
     this.dropSend(entry);
-    if (this.detachWhenSettled && this.sends.length === 0) {
-      this.detachWhenSettled = false;
-      void this.detach().catch((err) => log.debug(`detach ${this.deps.hydraId} after its prompts failed`, message(err)));
-    }
     if (entry.messageId) {
       this.own.delete(entry.messageId);
     }
