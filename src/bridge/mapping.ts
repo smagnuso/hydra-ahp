@@ -57,6 +57,10 @@ function promptText(prompt: unknown): string {
   return lines.join("\n");
 }
 
+export function withModel(message: Json, model: string | undefined): Json {
+  return model && message.model === undefined ? { ...message, model: { id: model } } : message;
+}
+
 function messageOf(body: string, kind: string, meta?: Json): Json {
   return { text: body, origin: { kind }, ...(meta ? { _meta: meta } : {}) };
 }
@@ -139,6 +143,8 @@ export class ChatMapper {
   // Set once a turn was ended here ahead of Hydra, so its trailing frames do not open an orphan turn.
   private silenced = false;
   private deferredSteer: { turnId: string; message: Json; pendingId?: string } | undefined;
+  // The session's current model, stamped on the turns opened here so a client's model picker restores to it.
+  model: string | undefined;
   // Hydra messageIds of turns AHP clients started, mapped to the client's turnId.
   readonly aliases = new Map<string, string>();
 
@@ -394,7 +400,7 @@ export class ChatMapper {
       type: "chat/turnStarted",
       turnId: id,
       startedAt: iso(startedMs),
-      message,
+      message: withModel(message, this.model),
       ...(queuedMessageId ? { queuedMessageId } : {}),
     });
     return actions;

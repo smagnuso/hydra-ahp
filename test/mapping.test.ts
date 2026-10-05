@@ -194,4 +194,13 @@ describe("chat mapping", () => {
     expect(next.find((action) => action.type === "chat/turnStarted")).toMatchObject({ turnId: "s", queuedMessageId: "p1" });
     expect(mapper.activeOriginId).toBe("m1");
   });
+
+  it("stamps the session's current model on the turns it opens", () => {
+    const mapper = new ChatMapper();
+    expect(mapper.map(prompt("m1"))[0]).toMatchObject({ type: "chat/turnStarted", message: { text: "go" } });
+    expect((mapper.map(prompt("m1"))[1] as { message: { model?: unknown } }).message.model).toBeUndefined();
+    mapper.model = "gpt-6-luna";
+    const started = mapper.map(prompt("m2")).find((action) => action.type === "chat/turnStarted");
+    expect(started).toMatchObject({ message: { model: { id: "gpt-6-luna" } } });
+  });
 });

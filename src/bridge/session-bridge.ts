@@ -6,7 +6,7 @@ import type { ProtocolCore } from "../protocol/core.js";
 import { ErrorCodes, RpcError } from "../rpc/peer.js";
 import { logger } from "../util/log.js";
 import { sideChatOrigin, type Catalog } from "./catalog.js";
-import { ChatMapper, type Frame } from "./mapping.js";
+import { ChatMapper, withModel, type Frame } from "./mapping.js";
 import { UnsupportedContent, chooseOption, confirmationOptions, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
 import { optionIdOf, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
@@ -341,6 +341,9 @@ export class SessionBridge implements SessionListener {
     for (const frame of history) {
       collect(this.mapper.map(frame));
     }
+    // History does not record model switches, so only the latest replayed turn is stamped with the model in use now.
+    this.noteModel(text(meta.currentModel) ?? parseConfigOptions(configOptions).find((option) => option.id === "model")?.currentValue);
+    stampLatestTurn(produced, this.model);
     this.buffering = undefined;
     for (const event of pending) {
       if (event.kind !== "permission") {
@@ -508,7 +511,13 @@ export class SessionBridge implements SessionListener {
       return;
     }
     if (kind === "config_option_update") {
-      this.applyConfig(parseConfigOptions(frame.update.configOptions));
+      const options = parseConfigOptions(frame.update.configOptions);
+      this.noteModel(options.find((option) => option.id === "model")?.currentValue);
+      this.applyConfig(options);
+      return;
+    }
+    if (kind === "_hydra_current_model_update") {
+      this.noteModel(text(frame.update.currentModel));
       return;
     }
     sink(this.mapper.map(frame));
@@ -858,8 +867,15 @@ export class SessionBridge implements SessionListener {
     } catch (err) {
       return `the agent did not switch to model ${wanted}: ${message(err)}`;
     }
-    this.model = wanted;
+    this.noteModel(wanted);
     return undefined;
+  }
+
+  private noteModel(model: string | undefined): void {
+    if (model) {
+      this.model = model;
+      this.mapper.model = model;
+    }
   }
 
   private send(entry: OwnEntry): void {
@@ -1405,5 +1421,13 @@ export class SessionBridge implements SessionListener {
     const oldest = oldestSeq(frames);
     const next = page.hasMore && oldest !== undefined ? String(oldest) : undefined;
     core.publish(chatUri, action({ type: "chat/turnsLoaded", turns, ...(next !== undefined ? { turnsNextCursor: next } : {}) }));
+  }
+}
+
+function stampLatestTurn(actions: Json[], model: string | undefined): void {
+  const index = actions.findLastIndex((next) => next.type === "chat/turnStarted");
+  if (index >= 0) {
+    const started = actions[index] as Json;
+    actions[index] = { ...started, message: withModel(bag(started.message), model) };
   }
 }
