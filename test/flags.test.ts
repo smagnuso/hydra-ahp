@@ -27,7 +27,8 @@ describe("flag store", () => {
     expect(store.set("beta:hydra_session_b", { isRead: true })).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     const again = new FlagStore(path);
-    expect(again.get("hydra_session_a")).toEqual({ isRead: false, isArchived: true });
+    expect(again.get("hydra_session_a")).toEqual({ isRead: false, isArchived: true, archivedAt: store.get("hydra_session_a").archivedAt });
+    expect(again.get("hydra_session_a").archivedAt).toBeTypeOf("number");
     expect(again.get("beta:hydra_session_b")).toEqual({ isRead: true, isArchived: false });
     expect(again.get("unknown")).toEqual({ isRead: false, isArchived: false });
   });

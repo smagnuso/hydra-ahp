@@ -621,11 +621,18 @@ export class SessionBridge implements SessionListener {
       return refuse(`${flag} must be a boolean`);
     }
     const value = body[flag] as boolean;
-    const { core, catalog, hydraId, sessionUri, chatUri } = this.deps;
+    const { catalog, hydraId } = this.deps;
     catalog.setFlags(hydraId, { [flag]: value });
     if (flag === "isArchived" && value) {
       void this.retireIfIdle().catch((err) => log.debug(`letting ${hydraId} go cold failed`, message(err)));
     }
+    this.showFlag(flag, value, origin);
+    return ACCEPT;
+  }
+
+  // Brings the open session and chat channels in line with a mark; origin already carries it as the client's own action.
+  showFlag(flag: "isRead" | "isArchived", value: boolean, origin?: string): void {
+    const { core, catalog, hydraId, sessionUri, chatUri } = this.deps;
     const bit = flag === "isRead" ? STATUS_IS_READ : STATUS_IS_ARCHIVED;
     // Only the default chat shares its marks with the session.
     const shared = catalog.isDefaultMember(hydraId);
@@ -638,7 +645,6 @@ export class SessionBridge implements SessionListener {
         core.publish(channel, action({ type: `${kind}/${flag}Changed`, [flag]: value }));
       }
     }
-    return ACCEPT;
   }
 
   // Done means the agent can stop: a live session that is not working goes cold, keeping its record; any client can warm it again.
@@ -683,6 +689,9 @@ export class SessionBridge implements SessionListener {
     }
     for (const next of actions) {
       core.publish(chatUri, action(next));
+      if (next.type === "chat/turnStarted" && typeof next.startedAt === "string") {
+        this.deps.catalog.noteTurn(this.deps.hydraId, Date.parse(next.startedAt));
+      }
     }
     this.settleRead();
     this.sweepParked();
@@ -824,8 +833,13 @@ export class SessionBridge implements SessionListener {
         return this.setFlag(channel, next.type.endsWith("isReadChanged") ? "isRead" : "isArchived", body);
       case "chat/draftChanged":
         return ACCEPT;
-      case "chat/turnStarted":
-        return this.startTurn(body);
+      case "chat/turnStarted": {
+        const decision = await this.startTurn(body);
+        if (decision.accept) {
+          this.deps.catalog.noteTurn(this.deps.hydraId, Date.now());
+        }
+        return decision;
+      }
       case "chat/turnCancelled":
         return this.cancelTurn(text(body.turnId) ?? "");
       case "chat/toolCallConfirmed":

@@ -7,7 +7,7 @@ import type { HydraAgent, HydraRest, HydraSessionEntry, SessionPage } from "../h
 import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
 import { chatKey, defaultChatUri, isChatUri, isFederatedId, providerSessionUri, sessionOfDefaultChat, sessionUri } from "./ids.js";
-import { NO_FLAGS, type FlagStore, type SessionFlags } from "../store/flags.js";
+import { NO_FLAGS, patchedFlags, readFlags, sameFlags, type FlagStore, type SessionFlags } from "../store/flags.js";
 import type { ConfigStore } from "../store/configs.js";
 import type { KnownModel, ModelStore } from "../store/models.js";
 import { toConfigState, type ConfigOption } from "./config.js";
@@ -71,6 +71,7 @@ export class Catalog {
   private readonly flagWrites = new Map<string, Promise<void>>();
   private readonly published = new Map<string, SessionSummary>();
   private readonly pendingCreations = new Set<string>();
+  private readonly reviveListeners = new Set<(hydraId: string) => void>();
   private readonly changeListeners = new Set<() => void>();
   private cursor: number | undefined;
   private polls = 0;
@@ -195,11 +196,38 @@ export class Catalog {
 
   // Persists a read or archive change and tells root subscribers; returns whether anything changed.
   setFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
-    const changed = this.isLocal(hydraId) ? this.setSessionFlags(hydraId, patch) : (this.options.flags?.set(hydraId, patch) ?? false);
+    const changed = this.patchFlags(hydraId, patch);
     if (changed) {
       this.reconcile();
     }
     return changed;
+  }
+
+  private patchFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
+    return this.isLocal(hydraId) ? this.setSessionFlags(hydraId, patch) : (this.options.flags?.set(hydraId, patch) ?? false);
+  }
+
+  // Listeners hear of a session a new turn brought back from done, so its open channels can follow.
+  onRevived(listener: (hydraId: string) => void): void {
+    this.reviveListeners.add(listener);
+  }
+
+  // A turn that started after the session was marked done, from any client, brings it back.
+  noteTurn(hydraId: string, startedMs: number): void {
+    if (this.reviveIfDone(hydraId, startedMs)) {
+      this.reconcile();
+    }
+  }
+
+  private reviveIfDone(hydraId: string, startedMs: number): boolean {
+    const flags = this.flagsFor(hydraId);
+    if (!flags.isArchived || startedMs <= (flags.archivedAt ?? 0) || !this.patchFlags(hydraId, { isArchived: false })) {
+      return false;
+    }
+    for (const listener of this.reviveListeners) {
+      listener(hydraId);
+    }
+    return true;
   }
 
   // Federated sessions keep their marks in this host's own file: their extension_state is on the peer, out of this extension's reach.
@@ -210,8 +238,8 @@ export class Catalog {
 
   private setSessionFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
     const before = this.sessionFlags.get(hydraId) ?? NO_FLAGS;
-    const next = { ...before, ...patch };
-    if (next.isRead === before.isRead && next.isArchived === before.isArchived) {
+    const next = patchedFlags(before, patch);
+    if (sameFlags(next, before)) {
       return false;
     }
     this.sessionFlags.set(hydraId, next);
@@ -321,6 +349,9 @@ export class Catalog {
   private setEntry(row: HydraSessionEntry): void {
     const before = this.entries.get(row.sessionId);
     this.entries.set(row.sessionId, before?.interactive === true && row.interactive !== true ? { ...row, interactive: true } : row);
+    if (typeof row.turnStartedAt === "number") {
+      this.reviveIfDone(row.sessionId, row.turnStartedAt);
+    }
   }
 
   // Applies Hydra's merge rule; federated rows arrive whole on every response, never as a delta.
@@ -403,8 +434,7 @@ export class Catalog {
     }
     const legacy = this.options.flags?.get(hydraId);
     if (stored && typeof stored === "object") {
-      const value = stored as { isRead?: unknown; isArchived?: unknown };
-      this.sessionFlags.set(hydraId, { isRead: value.isRead === true, isArchived: value.isArchived === true });
+      this.sessionFlags.set(hydraId, readFlags(stored));
     } else if (legacy && (legacy.isRead || legacy.isArchived)) {
       this.sessionFlags.set(hydraId, legacy);
       this.writeFlags(hydraId, legacy);

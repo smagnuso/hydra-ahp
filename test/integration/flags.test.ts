@@ -53,7 +53,7 @@ describe("read and archive marks against a scratch daemon", () => {
     await view.until("chat mirrors the archive", (chat) => (chat.status & IS_ARCHIVED) === IS_ARCHIVED || undefined);
     await until("row archived", async () => (((await rowStatus(id)) ?? 0) & IS_ARCHIVED) === IS_ARCHIVED);
     await until("archive stored with the session", () => marks(id)?.isArchived === true);
-    expect(marks(id)).toEqual({ isRead: false, isArchived: true });
+    expect(marks(id)).toEqual({ isRead: false, isArchived: true, archivedAt: expect.any(Number) });
     await view.dispatch({ type: "session/isArchivedChanged", isArchived: false }, view.sessionUri);
     await until("row unarchived", async () => (((await rowStatus(id)) ?? 0) & IS_ARCHIVED) === 0);
     await view.close();

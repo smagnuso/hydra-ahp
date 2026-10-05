@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
+import { ROW, startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 import { act, sleep } from "./support/harness.js";
 import { chatOf, sessionOf } from "./support/chat-uri.js";
+import { STATUS_IS_ARCHIVED } from "../src/bridge/summary.js";
 
 const CHAT = chatOf("h1");
 const SESSION = sessionOf("h1");
@@ -35,5 +36,23 @@ describe("marking a chat done", () => {
       hydra.live = { status: "warm", attachedClients: 1, busy: true };
     });
     expect(await markDone()).toEqual([]);
+  });
+
+  it("comes back when a turn starts after it was marked done", async () => {
+    harness = await startBridgeHarness((hydra) => {
+      hydra.live = { status: "warm", attachedClients: 1, busy: true };
+      hydra.rows = [ROW({ busy: true, turnStartedAt: Date.now() - 60_000 })];
+    });
+    await markDone();
+    expect(harness.catalog.flagsFor("h1")).toMatchObject({ isArchived: true });
+    await sleep(150);
+    expect(harness.catalog.flagsFor("h1").isArchived).toBe(true);
+    harness.hydra.rows = [ROW({ busy: true, turnStartedAt: Date.now() + 1 })];
+    await sleep(150);
+    expect(harness.catalog.flagsFor("h1").isArchived).toBe(false);
+    expect(harness.hydra.buckets.get("h1")?.flags).toBeUndefined();
+    const chat = harness.core.store.state(CHAT) as { status: number };
+    expect(chat.status & STATUS_IS_ARCHIVED).toBe(0);
+    expect(harness.catalog.summaryFor(SESSION)!.status & STATUS_IS_ARCHIVED).toBe(0);
   });
 });

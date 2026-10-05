@@ -155,8 +155,9 @@ hydra `extension_state` (so it goes away with the session), federated sessions
 in this extension's `flags.json`. Hydra itself has no notion of done, so marking
 a chat done also lets its agent stop: if the hydra session is idle, it goes
 cold, keeping its record, and any client (the TUI, the browser) can resume it.
-A busy session keeps running. Pins are VS Code's
-own and never reach hydra.
+A busy session keeps running. A new prompt after that, from any client, clears
+the done mark so the session shows up in VS Code again; just resuming or
+viewing it does not. Pins are VS Code's own and never reach hydra.
 
 ### Settings
 
