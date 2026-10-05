@@ -74,7 +74,12 @@ export async function startApp(config: Config, version: string): Promise<App> {
   const sessions = new HydraSessions(client, { name: "hydra-ahp", version });
   const files = new FileService({ sessions: catalog, dirRoots: config.dirRoots });
   const terminals = new TerminalService();
-  const changesets = new ChangesetService({ cwdOf: (uri) => catalog.localCwdOf(uri) });
+  const changesets = new ChangesetService({
+    cwdOf: (uri) => catalog.localCwdOf(uri),
+    membersOf: (uri) => catalog.membersOf(uri),
+    startedAt: (uri) => catalog.startedAt(uri),
+    editedPaths: async (id) => (await rest.sessionDiff(id)).map((file) => file.path),
+  });
   const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, changesets, permissionDelayMs: config.permissionDelayMs });
   const core = new ProtocolCore({ backend, detachGraceMs: DETACH_GRACE_MS });
   await core.start();

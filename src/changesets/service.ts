@@ -1,31 +1,44 @@
+import { isAbsolute, relative } from "node:path";
 import type { Changeset, ChangesetFile, ChangesetState } from "@microsoft/agent-host-protocol";
 import { cwdToUri } from "../bridge/ids.js";
 import type { ProtocolCore } from "../protocol/core.js";
 import { ErrorCodes, RpcError } from "../rpc/peer.js";
 import { logger } from "../util/log.js";
-import { headContent, workingChanges, type ChangedFile } from "./git.js";
+import { changesSince, commitAt, contentAt, repoRoot, workingChanges, type ChangedFile } from "./git.js";
 
 const log = logger("changesets");
 
-const UNCOMMITTED = "/changeset/uncommitted";
-const HEAD_SEGMENT = "/head/";
+type ChangesetId = "session" | "uncommitted";
+
+const SEGMENT = "/changeset/";
+const AT_SEGMENT = "/at/";
+const CHANGESET_URI = /\/changeset\/(session|uncommitted)$/;
+const REVISION = /^(HEAD|[0-9a-f]{40}|[0-9a-f]{64})$/;
 const POLL_MS = 2_000;
+// Hydra walks a session's history to list its edits, so new ones are picked up less often than the tree is checked.
+const EDITS_EVERY_MS = 10_000;
 const NOT_FOUND = -32008;
 
-export function uncommittedUri(sessionUri: string): string {
-  return `${sessionUri}${UNCOMMITTED}`;
+export function changesetUri(sessionUri: string, id: ChangesetId): string {
+  return `${sessionUri}${SEGMENT}${id}`;
 }
 
 export function isChangesetUri(uri: string): boolean {
-  return uri.endsWith(UNCOMMITTED) && uri.length > UNCOMMITTED.length;
+  return CHANGESET_URI.test(uri);
 }
 
 export function changesetsFor(sessionUri: string): Changeset[] {
   return [
     {
+      label: "Session Changes",
+      description: "Files the agent edited in this session, compared with where the branch was when it started",
+      uriTemplate: changesetUri(sessionUri, "session"),
+      changeKind: "session",
+    },
+    {
       label: "Uncommitted Changes",
       description: "Everything in the session's repository that differs from HEAD",
-      uriTemplate: uncommittedUri(sessionUri),
+      uriTemplate: changesetUri(sessionUri, "uncommitted"),
       changeKind: "uncommitted",
     },
   ];
@@ -34,20 +47,30 @@ export function changesetsFor(sessionUri: string): Changeset[] {
 export interface ChangesetServiceOptions {
   // The working directory of a session on this machine; undefined for sessions whose files live elsewhere.
   cwdOf: (sessionUri: string) => string | undefined;
+  // The Hydra sessions behind an AHP session, and when the first of them was created.
+  membersOf: (sessionUri: string) => string[];
+  startedAt: (sessionUri: string) => string | undefined;
+  // Absolute paths a Hydra session's tool calls edited, as Hydra aggregates them from its history.
+  editedPaths: (hydraId: string) => Promise<string[]>;
   pollMs?: number;
+  editsEveryMs?: number;
 }
 
 interface Watched {
+  id: ChangesetId;
   sessionUri: string;
   files: Map<string, ChangesetFile>;
   timer?: NodeJS.Timeout;
   computing: boolean;
   stopped: boolean;
+  edited: Set<string>;
+  editsReadAt: number;
+  base?: { commit: string | undefined };
 }
 
 const action = (value: Record<string, unknown>) => value as never;
 
-// Serves each local session's uncommitted git changes as an AHP changeset, recomputed while someone watches it.
+// Serves each local session's changes as AHP changesets, recomputed from git while someone watches them.
 export class ChangesetService {
   private core!: ProtocolCore;
   private readonly watched = new Map<string, Watched>();
@@ -59,14 +82,23 @@ export class ChangesetService {
   }
 
   attach(uri: string): void {
-    if (this.watched.has(uri)) {
+    const match = CHANGESET_URI.exec(uri);
+    if (!match || this.watched.has(uri)) {
       return;
     }
-    const sessionUri = uri.slice(0, -UNCOMMITTED.length);
+    const sessionUri = uri.slice(0, match.index);
     if (!this.options.cwdOf(sessionUri)) {
       return;
     }
-    const watched: Watched = { sessionUri, files: new Map(), computing: false, stopped: false };
+    const watched: Watched = {
+      id: match[1] as ChangesetId,
+      sessionUri,
+      files: new Map(),
+      computing: false,
+      stopped: false,
+      edited: new Set(),
+      editsReadAt: 0,
+    };
     this.watched.set(uri, watched);
     this.core.createChannel(uri, { status: "computing", files: [] } as unknown as ChangesetState);
     void this.refresh(uri, watched);
@@ -90,25 +122,26 @@ export class ChangesetService {
   }
 
   ownsContent(uri: unknown): uri is string {
-    return typeof uri === "string" && uri.includes(`${UNCOMMITTED}${HEAD_SEGMENT}`);
+    return typeof uri === "string" && uri.includes(SEGMENT) && uri.includes(AT_SEGMENT);
   }
 
-  // The HEAD side of a changed file; only paths inside the repository's tree are reachable through git show.
+  // A changed file's content at a revision; only plain paths inside the repository's tree are reachable through git show.
   async read(uri: string, encoding: unknown): Promise<unknown> {
-    const at = uri.indexOf(`${UNCOMMITTED}${HEAD_SEGMENT}`);
-    const sessionUri = uri.slice(0, at);
-    const segments = uri.slice(at + UNCOMMITTED.length + HEAD_SEGMENT.length).split("/").map((segment) => decodeURIComponent(segment));
-    if (segments.some((segment) => segment === "" || segment === "." || segment === ".." || segment.includes("/") || segment.includes("\\"))) {
-      throw new RpcError(ErrorCodes.InvalidParams, "invalid changeset content path");
+    const at = uri.indexOf(AT_SEGMENT);
+    const changeset = uri.slice(0, at);
+    const match = CHANGESET_URI.exec(changeset);
+    const [rev, ...segments] = uri.slice(at + AT_SEGMENT.length).split("/").map((segment) => decodeURIComponent(segment));
+    if (!match || !rev || !REVISION.test(rev) || segments.length === 0 || segments.some(unsafeSegment)) {
+      throw new RpcError(ErrorCodes.InvalidParams, "invalid changeset content uri");
     }
-    const cwd = this.options.cwdOf(sessionUri);
-    const changes = cwd ? await workingChanges(cwd) : undefined;
-    if (!changes) {
+    const cwd = this.options.cwdOf(changeset.slice(0, match.index));
+    const root = cwd ? await repoRoot(cwd) : undefined;
+    if (!root) {
       throw new RpcError(NOT_FOUND, "no such file or directory");
     }
     let bytes: Buffer;
     try {
-      bytes = await headContent(changes.root, segments.join("/"));
+      bytes = await contentAt(root, rev, segments.join("/"));
     } catch {
       throw new RpcError(NOT_FOUND, "no such file or directory");
     }
@@ -124,10 +157,9 @@ export class ChangesetService {
     }
     watched.computing = true;
     try {
-      const cwd = this.options.cwdOf(watched.sessionUri);
-      const changes = cwd ? await workingChanges(cwd) : undefined;
+      const files = await this.compute(uri, watched);
       if (!watched.stopped) {
-        this.apply(uri, watched, changes ? changes.files.map((file) => toChangesetFile(uri, changes.root, file)) : []);
+        this.apply(uri, watched, files);
       }
     } catch (err) {
       log.debug(`computing ${uri} failed`, err instanceof Error ? err.message : err);
@@ -140,6 +172,46 @@ export class ChangesetService {
     if (!watched.stopped) {
       watched.timer = setTimeout(() => void this.refresh(uri, watched), this.options.pollMs ?? POLL_MS);
       watched.timer.unref();
+    }
+  }
+
+  private async compute(uri: string, watched: Watched): Promise<ChangesetFile[]> {
+    const cwd = this.options.cwdOf(watched.sessionUri);
+    if (!cwd) {
+      return [];
+    }
+    if (watched.id === "uncommitted") {
+      const changes = await workingChanges(cwd);
+      return changes ? changes.files.map((file) => toChangesetFile(uri, changes.root, "HEAD", file)) : [];
+    }
+    const root = await repoRoot(cwd);
+    if (!root) {
+      return [];
+    }
+    if (!watched.base) {
+      const started = this.options.startedAt(watched.sessionUri);
+      watched.base = { commit: started ? await commitAt(root, started) : undefined };
+    }
+    await this.readEdits(watched);
+    const paths = [...watched.edited]
+      .map((path) => relative(root, path))
+      .filter((path) => path !== "" && !path.startsWith("..") && !isAbsolute(path));
+    const files = await changesSince(root, watched.base.commit, paths);
+    return files.map((file) => toChangesetFile(uri, root, watched.base?.commit ?? "HEAD", file));
+  }
+
+  private async readEdits(watched: Watched): Promise<void> {
+    const now = Date.now();
+    if (watched.editsReadAt !== 0 && now - watched.editsReadAt < (this.options.editsEveryMs ?? EDITS_EVERY_MS)) {
+      return;
+    }
+    watched.editsReadAt = now;
+    for (const hydraId of this.options.membersOf(watched.sessionUri)) {
+      for (const path of await this.options.editedPaths(hydraId)) {
+        if (isAbsolute(path)) {
+          watched.edited.add(path);
+        }
+      }
     }
   }
 
@@ -167,16 +239,20 @@ export class ChangesetService {
   }
 }
 
-function toChangesetFile(changesetUri: string, root: string, file: ChangedFile): ChangesetFile {
+function unsafeSegment(segment: string): boolean {
+  return segment === "" || segment === "." || segment === ".." || segment.includes("/") || segment.includes("\\");
+}
+
+function toChangesetFile(changesetUri: string, root: string, rev: string, file: ChangedFile): ChangesetFile {
   const fileUri = cwdToUri(`${root}/${file.path}`);
-  const headUri = `${changesetUri}${HEAD_SEGMENT}${file.path.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`;
-  const diff = file.added !== undefined || file.removed !== undefined ? { diff: { ...(file.added !== undefined ? { added: file.added } : {}), ...(file.removed !== undefined ? { removed: file.removed } : {}) } } : {};
+  const beforeUri = `${changesetUri}${AT_SEGMENT}${rev}/${file.path.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`;
+  const counts = { ...(file.added !== undefined ? { added: file.added } : {}), ...(file.removed !== undefined ? { removed: file.removed } : {}) };
   return {
     id: fileUri,
     edit: {
-      ...(file.inHead ? { before: { uri: fileUri, content: { uri: headUri } } } : {}),
+      ...(file.inHead ? { before: { uri: fileUri, content: { uri: beforeUri } } } : {}),
       ...(file.onDisk ? { after: { uri: fileUri, content: { uri: fileUri } } } : {}),
-      ...diff,
+      ...(Object.keys(counts).length > 0 ? { diff: counts } : {}),
     },
   } as ChangesetFile;
 }

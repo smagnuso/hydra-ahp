@@ -119,6 +119,7 @@ export class FakeHydra {
     listSessions: async () => ({ sessions: this.rows, removed: [], cursor: 1 }),
     agents: async () => ({ agents: [] }),
     config: async () => ({}),
+    sessionDiff: async (id: string) => (this.edited.get(id) ?? []).map((path) => ({ path, hunks: [] })),
     historyPage: async (_id: string, beforeSeq: number, turns?: number) => {
       this.pageCalls.push({ beforeSeq, ...(turns !== undefined ? { turns } : {}) });
       if (beforeSeq === Number.MAX_SAFE_INTEGER) {
@@ -135,6 +136,7 @@ export class FakeHydra {
   } as unknown as HydraRest;
 
   readonly buckets = new Map<string, Record<string, unknown>>();
+  readonly edited = new Map<string, string[]>();
   extState = {
     get: async (id: string, key: string) => this.buckets.get(id)?.[key] ?? null,
     list: async (id: string) => ({ ...this.buckets.get(id) }),
@@ -182,7 +184,16 @@ export async function startBridgeHarness(
   const { models, flags, changesetPollMs, ...backendOptions } = options;
   const withChangesets = changesetPollMs !== undefined;
   const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}), ...(flags ? { flags } : {}), changesets: withChangesets });
-  const changesets = withChangesets ? new ChangesetService({ cwdOf: (uri) => catalog.localCwdOf(uri), pollMs: changesetPollMs }) : undefined;
+  const changesets = withChangesets
+    ? new ChangesetService({
+        cwdOf: (uri) => catalog.localCwdOf(uri),
+        membersOf: (uri) => catalog.membersOf(uri),
+        startedAt: (uri) => catalog.startedAt(uri),
+        editedPaths: async (id) => (await hydra.rest.sessionDiff(id)).map((file) => file.path),
+        pollMs: changesetPollMs,
+        editsEveryMs: changesetPollMs,
+      })
+    : undefined;
   const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ shell: "/bin/sh", orphanGraceMs: 200 }), ...(changesets ? { changesets } : {}), ...backendOptions });
   const core = new ProtocolCore({ backend });
   await core.start();

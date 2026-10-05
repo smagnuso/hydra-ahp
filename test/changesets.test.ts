@@ -11,6 +11,7 @@ import { sleep } from "./support/harness.js";
 
 const SESSION = "fake:/h1";
 const CHANGESET = `${SESSION}/changeset/uncommitted`;
+const SESSION_CHANGES = `${SESSION}/changeset/session`;
 
 function repo(): string {
   const dir = mkdtempSync(join(tmpdir(), "ahp-changes-"));
@@ -62,7 +63,10 @@ describe("uncommitted changes", () => {
 
     const sub = await session.client.subscribe(SESSION);
     const changesets = (sub.result.snapshot?.state as SessionState).changesets;
-    expect(changesets).toEqual([expect.objectContaining({ uriTemplate: CHANGESET, changeKind: "uncommitted" })]);
+    expect(changesets).toEqual([
+      expect.objectContaining({ uriTemplate: SESSION_CHANGES, changeKind: "session" }),
+      expect.objectContaining({ uriTemplate: CHANGESET, changeKind: "uncommitted" }),
+    ]);
 
     await session.client.subscribe(CHANGESET);
     const state = (): ChangesetState => harness?.core.store.state(CHANGESET) as ChangesetState;
@@ -76,10 +80,40 @@ describe("uncommitted changes", () => {
 
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: edit?.before?.content.uri } as never)) as unknown as { data: string };
     expect(before.data).toBe("one\ntwo\n");
-    await expect(session.client.request("resourceRead", { channel: "ahp-root://", uri: `${CHANGESET}/head/..%2F..%2Fetc%2Fpasswd` } as never)).rejects.toBeDefined();
+    await expect(session.client.request("resourceRead", { channel: "ahp-root://", uri: `${CHANGESET}/at/HEAD/..%2F..%2Fetc%2Fpasswd` } as never)).rejects.toBeDefined();
 
     execFileSync("git", ["checkout", "--", "kept.txt"], { cwd });
     await session.waitFor((envelope) => envelope.channel === CHANGESET && (envelope.action as { type: string }).type === "changeset/fileRemoved", 3000);
     expect(state().files.map((file) => file.id)).not.toContain(kept);
+  });
+
+  it("keeps the files the agent edited, compared with the session's starting commit, after they are committed", async () => {
+    dir = repo();
+    const cwd = dir;
+    const git = (...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_COMMITTER_DATE: new Date(Date.now() + 3_600_000).toISOString() } });
+    const startedAt = new Date(Date.now() + 1_000).toISOString();
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd, createdAt: startedAt })];
+      hydra.edited.set("h1", ["kept.txt", "new.txt", "gone.txt"].map((path) => join(cwd, path)));
+    }, { changesetPollMs: 50 });
+    writeFileSync(join(cwd, "other.txt"), "not the agent's\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "later");
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const ids = state().files.map((file) => file.id).sort();
+    expect(ids).toEqual([cwdToUri(join(cwd, "gone.txt")), cwdToUri(join(cwd, "kept.txt")), cwdToUri(join(cwd, "new.txt"))].sort());
+    const kept = state().files.find((file) => file.id === cwdToUri(join(cwd, "kept.txt")))?.edit;
+    expect(kept?.diff).toEqual({ added: 1, removed: 0 });
+    const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: kept?.before?.content.uri } as never)) as unknown as { data: string };
+    expect(before.data).toBe("one\ntwo\n");
+    expect(state().files.find((file) => file.id === cwdToUri(join(cwd, "new.txt")))?.edit.before).toBeUndefined();
   });
 });

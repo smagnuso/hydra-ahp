@@ -110,6 +110,72 @@ async function countLines(file: string): Promise<{ added?: number }> {
   }
 }
 
-export async function headContent(root: string, path: string): Promise<Buffer> {
-  return git(root, ["show", `HEAD:${path}`]);
+// A file's content at a revision, HEAD or a commit sha.
+export async function contentAt(root: string, rev: string, path: string): Promise<Buffer> {
+  return git(root, ["show", `${rev}:${path}`]);
+}
+
+// The commit HEAD's history was at by a given time, or undefined when there was none yet.
+export async function commitAt(root: string, iso: string): Promise<string | undefined> {
+  try {
+    return (await git(root, ["rev-list", "-1", `--before=${iso}`, "HEAD"])).toString("utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// How the given repository-relative paths differ now from a base commit; unchanged ones are left out.
+export async function changesSince(root: string, base: string | undefined, paths: string[]): Promise<ChangedFile[]> {
+  if (paths.length === 0) {
+    return [];
+  }
+  const baseBlobs = new Map<string, string>();
+  if (base) {
+    for (const entry of fields(await git(root, ["ls-tree", "-r", "-z", base, "--", ...paths]))) {
+      const tab = entry.indexOf("\t");
+      const blob = entry.slice(0, tab).split(" ")[2];
+      if (blob) {
+        baseBlobs.set(entry.slice(tab + 1), blob);
+      }
+    }
+  }
+  const onDisk = (
+    await Promise.all(
+      paths.map(async (path) => {
+        try {
+          return (await stat(join(root, path))).isFile() ? path : undefined;
+        } catch {
+          return undefined;
+        }
+      }),
+    )
+  ).filter((path): path is string => path !== undefined);
+  const diskBlobs = new Map<string, string>();
+  if (onDisk.length > 0) {
+    const hashes = (await git(root, ["hash-object", "--", ...onDisk])).toString("utf8").trim().split("\n");
+    onDisk.forEach((path, index) => diskBlobs.set(path, hashes[index] ?? ""));
+  }
+  const counts = new Map<string, { added?: number; removed?: number }>();
+  if (base) {
+    for (const line of fields(await git(root, ["diff", "--numstat", "-z", "--no-renames", base, "--", ...paths]))) {
+      const [added, removed, path] = line.split("\t");
+      if (path !== undefined) {
+        counts.set(path, {
+          ...(added !== "-" ? { added: Number(added) } : {}),
+          ...(removed !== "-" ? { removed: Number(removed) } : {}),
+        });
+      }
+    }
+  }
+  const files: ChangedFile[] = [];
+  for (const path of paths) {
+    const before = baseBlobs.get(path);
+    const after = diskBlobs.get(path);
+    if (before === after) {
+      continue;
+    }
+    const counted = counts.get(path) ?? (before === undefined && after !== undefined ? await countLines(join(root, path)) : {});
+    files.push({ path, inHead: before !== undefined, onDisk: after !== undefined, ...counted });
+  }
+  return files;
 }

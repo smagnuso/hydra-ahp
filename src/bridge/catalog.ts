@@ -151,6 +151,15 @@ export class Catalog {
     return lead && this.isLocal(lead) ? this.entries.get(lead)?.cwd : undefined;
   }
 
+  // When the earliest of a session's Hydra sessions was created.
+  startedAt(sessionUri: string): string | undefined {
+    const times = this.membersOf(sessionUri)
+      .map((id) => this.entries.get(id)?.createdAt)
+      .filter((at): at is string => typeof at === "string")
+      .sort();
+    return times[0];
+  }
+
   changesetsOf(sessionUri: string): Changeset[] | undefined {
     return this.options.changesets && this.localCwdOf(sessionUri) ? changesetsFor(sessionUri) : undefined;
   }

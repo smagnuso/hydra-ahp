@@ -158,6 +158,11 @@ export class HydraRest {
     return this.request("GET", "/v1/config");
   }
 
+  // Hydra's per-file aggregation of the edits a session's tool calls recorded.
+  sessionDiff(id: string): Promise<Array<{ path: string; created?: boolean }>> {
+    return this.request("GET", `/v1/sessions/${encodeURIComponent(id)}/diff`);
+  }
+
   historyPage(id: string, beforeSeq: number, turns?: number): Promise<HistoryPage> {
     const params = new URLSearchParams({ beforeSeq: String(beforeSeq) });
     if (turns !== undefined) {
