@@ -116,7 +116,8 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     send({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } });
     send({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: " world" } });
     live.update({ update: { sessionUpdate: "usage_update", used: 5, size: 10 } });
-    await session.waitFor((e) => e.action.type === "chat/delta" && (e.action as { content?: string }).content === " world");
+    // The usage update was sent last, so its envelope is the one that says the client has caught up.
+    await session.waitFor((e) => e.action.type === "chat/usage");
     settle(session, oracle);
     const mid = harness.core.store.state(CHAT) as ChatState;
     expect(mid.activeTurn?.id).toBe("live1");
