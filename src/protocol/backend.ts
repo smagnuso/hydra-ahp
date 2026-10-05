@@ -39,6 +39,9 @@ export interface Backend {
   // Called when a channel's last subscriber leaves.
   detach?(uri: string): void | Promise<void>;
 
+  // Called when a client's connection goes away, whether or not it comes back.
+  connectionClosed?(clientId: string): void;
+
   // Validated client actions land here; accepting echoes the action to subscribers.
   handleAction(request: ActionRequest): ActionDecision | Promise<ActionDecision>;
 

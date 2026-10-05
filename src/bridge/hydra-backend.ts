@@ -10,6 +10,8 @@ import type { ActionDecision, ActionRequest, Backend, ClientContext } from "../p
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { FileService } from "../files/service.js";
+import type { TerminalService } from "../terminals/service.js";
+import { isTerminalUri } from "../protocol/channels.js";
 import { HydraHttpError, type HydraRest, type HydraSessionEntry } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
@@ -40,6 +42,7 @@ export interface HydraBackendOptions {
   sessions: HydraSessions;
   version: string;
   files: FileService;
+  terminals?: TerminalService;
 }
 
 function message(err: unknown): string {
@@ -59,6 +62,7 @@ export class HydraBackend implements Backend {
   private readonly bridges = new Map<string, SessionBridge>();
   private readonly creating = new Map<string, Promise<void>>();
   private readonly files: FileService;
+  private readonly terminals: TerminalService | undefined;
 
   constructor(options: HydraBackendOptions) {
     this.catalog = options.catalog;
@@ -66,17 +70,20 @@ export class HydraBackend implements Backend {
     this.extState = options.extState;
     this.sessions = options.sessions;
     this.files = options.files;
+    this.terminals = options.terminals;
     this.serverInfo = { name: "hydra-ahp", version: options.version };
   }
 
   async start(core: ProtocolCore): Promise<void> {
     this.core = core;
+    await this.terminals?.start(core);
     this.catalog.onChange(() => this.onCatalogChange());
     await this.catalog.start(core);
   }
 
   async stop(): Promise<void> {
     this.catalog.stop();
+    this.terminals?.stop();
     const bridges = [...this.bridges.values()];
     this.bridges.clear();
     await Promise.all(bridges.map((bridge) => bridge.dispose().catch(() => undefined)));
@@ -249,8 +256,15 @@ export class HydraBackend implements Backend {
     }
   }
 
+  connectionClosed(clientId: string): void {
+    this.terminals?.connectionClosed(clientId);
+  }
+
   async handleAction(request: ActionRequest): Promise<ActionDecision> {
     const { channel } = request;
+    if (this.terminals && isTerminalUri(channel)) {
+      return this.terminals.handleAction(channel, request.action as never);
+    }
     if (!isChatUri(channel) && !isSessionUri(channel)) {
       return { accept: false, reason: "this host does not accept that action" };
     }
@@ -267,6 +281,9 @@ export class HydraBackend implements Backend {
   async handleCommand(method: string, params: unknown, client: ClientContext): Promise<unknown> {
     if (this.files.handles(method)) {
       return this.files.handle(method, params, client);
+    }
+    if (this.terminals?.handles(method)) {
+      return this.terminals.handle(method, params, client);
     }
     const body = (params ?? {}) as Record<string, unknown>;
     switch (method) {

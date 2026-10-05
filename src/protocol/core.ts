@@ -71,6 +71,9 @@ export class ProtocolCore {
     }
     connection.closed = true;
     this.connections.delete(connection);
+    if (connection.clientId) {
+      this.backend.connectionClosed?.(connection.clientId);
+    }
     for (const uri of [...connection.activeIn]) {
       this.retireActiveClient(connection, uri);
     }
@@ -85,6 +88,10 @@ export class ProtocolCore {
     if (connection.clientId && this.store.has(uri)) {
       this.publish(uri, { type: "session/activeClientRemoved", clientId: connection.clientId } as never);
     }
+  }
+
+  isConnected(clientId: string): boolean {
+    return [...this.connections].some((connection) => connection.clientId === clientId);
   }
 
   context(connection: Connection): ClientContext {

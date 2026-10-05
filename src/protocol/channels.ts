@@ -2,6 +2,7 @@ import {
   chatReducer,
   rootReducer,
   sessionReducer,
+  terminalReducer,
   type ActionEnvelope,
   type ActionOrigin,
   type ChatState,
@@ -9,16 +10,24 @@ import {
   type SessionState,
   type Snapshot,
   type StateAction,
+  type TerminalState,
 } from "@microsoft/agent-host-protocol";
 
 export const ROOT_URI = "ahp-root://";
 
-export type ChannelKind = "root" | "session" | "chat";
+export type ChannelKind = "root" | "session" | "chat" | "terminal";
 
-export type ChannelState = RootState | SessionState | ChatState;
+export type ChannelState = RootState | SessionState | ChatState | TerminalState;
+
+// Clients pick terminal URIs too; the spec uses ahp-terminal: and VS Code agenthost-terminal:.
+const TERMINAL_URI = /^[a-z][a-z0-9+.-]*terminal:\/[^/]+$/i;
+
+export function isTerminalUri(uri: string): boolean {
+  return TERMINAL_URI.test(uri);
+}
 
 // Clients that create a session pick its URI, usually "<provider>:/<id>", so any such shape is a session channel.
-const SESSION_URI = /^(?!ahp-chat:|ahp-root:)[a-z][a-z0-9+.-]*:\/[^/]+$/i;
+const SESSION_URI = /^(?!ahp-chat:|ahp-root:|[a-z0-9+.-]*terminal:)[a-z][a-z0-9+.-]*:\/[^/]+$/i;
 
 export function isSessionChannelUri(uri: string): boolean {
   return SESSION_URI.test(uri);
@@ -30,6 +39,9 @@ export function channelKind(uri: string): ChannelKind | undefined {
   }
   if (uri.startsWith("ahp-chat:")) {
     return "chat";
+  }
+  if (isTerminalUri(uri)) {
+    return "terminal";
   }
   if (isSessionChannelUri(uri)) {
     return "session";
@@ -62,6 +74,8 @@ function reduce(kind: ChannelKind, state: ChannelState, action: StateAction): Ch
       return sessionReducer(state as SessionState, action as Parameters<typeof sessionReducer>[1]);
     case "chat":
       return chatReducer(state as ChatState, action as Parameters<typeof chatReducer>[1]);
+    case "terminal":
+      return terminalReducer(state as TerminalState, action as Parameters<typeof terminalReducer>[1]);
   }
 }
 

@@ -1,6 +1,7 @@
 import { ProtocolCore } from "./protocol/core.js";
 import { AhpListener } from "./server/listener.js";
 import { FlagStore } from "./store/flags.js";
+import { TerminalService } from "./terminals/service.js";
 import { ConfigStore } from "./store/configs.js";
 import { ModelStore } from "./store/models.js";
 import { TokenRegistry } from "./store/tokens.js";
@@ -67,7 +68,8 @@ export async function startApp(config: Config, version: string): Promise<App> {
   });
   const sessions = new HydraSessions(client, { name: "hydra-ahp", version });
   const files = new FileService({ sessions: catalog, dirRoots: config.dirRoots });
-  const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files });
+  const terminals = new TerminalService();
+  const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals });
   const core = new ProtocolCore({ backend });
   await core.start();
 

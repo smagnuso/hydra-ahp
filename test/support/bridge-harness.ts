@@ -6,6 +6,7 @@ import { HydraBackend } from "../../src/bridge/hydra-backend.js";
 import type { Frame } from "../../src/bridge/mapping.js";
 import type { Json } from "../../src/bridge/turns.js";
 import { FileService } from "../../src/files/service.js";
+import { TerminalService } from "../../src/terminals/service.js";
 import type { ExtensionState } from "../../src/hydra/ext-state.js";
 import type { HistoryPage, HydraRest, HydraSessionEntry } from "../../src/hydra/rest.js";
 import type { AttachOptions, AttachResult, HydraSessions, SessionListener, SteeringResult } from "../../src/hydra/sessions.js";
@@ -138,6 +139,7 @@ export interface BridgeHarness {
   backend: HydraBackend;
   catalog: Catalog;
   connect(version?: string): Promise<Session>;
+  connectFull(): Promise<Session>;
   stop(): Promise<void>;
 }
 
@@ -160,12 +162,13 @@ export async function startBridgeHarness(setup: (hydra: FakeHydra) => void = () 
   const dir = mkdtempSync(join(tmpdir(), "ahp-bridge-"));
   const tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
   const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40 });
-  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }) });
+  const backend = new HydraBackend({ catalog, rest: hydra.rest, extState: hydra.extState, sessions: hydra.sessions, version: "0", files: new FileService({ sessions: catalog, dirRoots: [] }), terminals: new TerminalService({ shell: "/bin/sh", orphanGraceMs: 200 }) });
   const core = new ProtocolCore({ backend });
   await core.start();
   const listener = new AhpListener({ core, tokens });
   const port = await listener.listen();
   const token = tokens.mint("test").token;
+  const fullToken = tokens.mint("full", "full").token;
   const opened: Session[] = [];
   return {
     hydra,
@@ -174,6 +177,11 @@ export async function startBridgeHarness(setup: (hydra: FakeHydra) => void = () 
     catalog,
     async connect() {
       const session = await openSession(`ws://127.0.0.1:${port}/?tkn=${encodeURIComponent(token)}`);
+      opened.push(session);
+      return session;
+    },
+    async connectFull() {
+      const session = await openSession(`ws://127.0.0.1:${port}/?tkn=${encodeURIComponent(fullToken)}`);
       opened.push(session);
       return session;
     },

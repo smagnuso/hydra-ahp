@@ -103,7 +103,7 @@ completions.
 |---|---|---|---|
 | `scoped` (default) | Inside the cwds of local sessions and files those sessions edited | none | Normal VS Code use |
 | `read` | Anywhere you can read | none | A client that must browse outside your session folders |
-| `full` | Anywhere | Write, delete, mkdir, move and copy anywhere | Only a client that needs to write; it bypasses Hydra's history and permission prompts, so a `full` token is effectively a shell as you |
+| `full` | Anywhere | Write, delete, mkdir, move and copy anywhere, and terminals | A client that needs to write or wants a terminal; it bypasses Hydra's history and permission prompts, so a `full` token is effectively a shell as you |
 
 The new-session folder picker lists directories only, under
 `HYDRA_AHP_DIR_ROOTS`, at the `scoped` level. To change a token's level, mint a
@@ -136,7 +136,12 @@ token leaks, `token revoke <id>` closes its connections immediately.
 
 ## Limits of v1
 
-- No terminals, changesets, automations or customizations.
+- Terminals only for `full` tokens: `createTerminal` starts your `$SHELL` on this
+  machine in the requested directory (VS Code's Agents window opens one per
+  session). Lower levels get `-32601`, which VS Code shows as an error. A
+  terminal whose client stays disconnected for 30 seconds is killed. Terminals
+  need `node-pty`, an optional dependency; without it they are unavailable.
+- No changesets, automations or customizations.
 - No file watches (`createResourceWatch` returns `-32601` at every level).
 - No elicitation (`chat/inputRequested`); Hydra has no counterpart.
 - Model lists are learned from sessions: Hydra only reveals an agent's models

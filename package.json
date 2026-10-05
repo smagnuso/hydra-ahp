@@ -56,5 +56,8 @@
   "dependencies": {
     "@microsoft/agent-host-protocol": "1.0.0",
     "ws": "^8.22.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   }
 }
