@@ -16,6 +16,7 @@ export interface Config {
   tokensPath: string;
   flagsPath: string;
   modelsPath: string;
+  configsPath: string;
   dirRoots: string[];
 }
 
@@ -45,6 +46,10 @@ export function flagsPath(env: NodeJS.ProcessEnv): string {
 
 export function modelsPath(env: NodeJS.ProcessEnv): string {
   return join(hydraHome(env), "extensions", "ahp", "models.json");
+}
+
+export function configsPath(env: NodeJS.ProcessEnv): string {
+  return join(hydraHome(env), "extensions", "ahp", "configs.json");
 }
 
 // Directories the folder picker may browse (directories only) at the scoped level; defaults to the home directory.
@@ -78,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tokensPath: tokensPath(env),
     flagsPath: flagsPath(env),
     modelsPath: modelsPath(env),
+    configsPath: configsPath(env),
     dirRoots: dirRoots(env),
   };
 }

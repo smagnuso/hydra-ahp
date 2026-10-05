@@ -4,6 +4,7 @@ import type { ChatState, SessionState } from "@microsoft/agent-host-protocol";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { act, openSession } from "../support/harness.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
+import { chatOf } from "../support/chat-uri.js";
 
 const text = (chat: ChatState, index: number): string | undefined => chat.turns[index]?.message.text;
 
@@ -36,7 +37,7 @@ describe("several chats in one session against a scratch daemon", () => {
     await driver.prompt(id, "first");
     const uri = `ahp-session:/${id}`;
     await until("session listed", async () => ((await items()).some((item) => item.resource === uri) ? true : undefined));
-    return { id, uri, chat: `ahp-chat:/${id}` };
+    return { id, uri, chat: chatOf(id) };
   }
 
   async function session(uri: string): Promise<SessionState> {

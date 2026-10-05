@@ -142,6 +142,15 @@ token leaks, `token revoke <id>` closes its connections immediately.
 - Model lists are learned from sessions: Hydra only reveals an agent's models
   once a session of it exists, so an agent's model picker fills in after its
   first session on this host (kept in `models.json`).
+- Settings: every option the underlying agent advertises (effort, fast mode,
+  session mode, ...) is a session setting a client can show and change, named
+  `acp.<option id>`. The model and Hydra's agent switch are left out (the model
+  has its own picker, the agent is the session's provider). A session's
+  settings come from attaching to it, so a cold session shows none until it has
+  been opened live, and a setting that appears or disappears while a client is
+  subscribed (AHP cannot update the schema, only the values) shows up on the
+  next subscribe. A new session is offered the options last seen from its agent
+  (kept in `configs.json`).
 - Loopback only; no TLS and no remote access.
 - New sessions are created on the local Hydra only, not on federated remotes
   (existing federated sessions are listed and driven, ids stay `name:localId`).

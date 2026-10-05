@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import type {
   ListSessionsParams,
   ListSessionsResult,
+  SessionConfigState,
   SessionState,
 } from "@microsoft/agent-host-protocol";
 import { ErrorCodes, RpcError } from "../rpc/peer.js";
@@ -13,7 +14,8 @@ import { HydraHttpError, type HydraRest, type HydraSessionEntry } from "../hydra
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
 import { AHP_CHAT_KEY, AHP_URI_KEY, type Catalog, type SideOrigin } from "./catalog.js";
-import { chatKey, chatUri, cwdToUri, isChatUri, isSessionUri, sessionKey, uriToCwd } from "./ids.js";
+import { toConfigState } from "./config.js";
+import { chatKey, cwdToUri, defaultChatUri, isChatUri, isSessionUri, sessionKey, uriToCwd } from "./ids.js";
 import { emptyChat } from "./replay.js";
 import { SessionBridge } from "./session-bridge.js";
 import { STATUS_IDLE, UNTITLED, entryToSummary, summaryToSessionState } from "./summary.js";
@@ -201,14 +203,27 @@ export class HydraBackend implements Backend {
     if (!isSessionUri(uri) || this.core.store.has(uri)) {
       return;
     }
+    // A live session's settings only come from attaching to it, and the channel can only get them when it is created.
+    const lead = this.catalog.membersOf(uri)[0];
+    if (lead && this.catalog.entry(lead)?.status !== "cold") {
+      await this.bridgeFor(this.catalog.chatOf(lead))?.attach().catch((err) => {
+        log.debug(`attach ${lead} for its settings failed`, message(err));
+      });
+    }
     const summary = this.catalog.summaryFor(uri);
-    if (summary) {
-      this.core.createChannel(uri, summaryToSessionState(summary, "ready"));
+    if (summary && !this.core.store.has(uri)) {
+      this.core.createChannel(uri, summaryToSessionState(summary, "ready", this.catalog.configStateFor(uri)));
     }
   }
 
   async detach(uri: string): Promise<void> {
     if (isSessionUri(uri)) {
+      for (const id of this.catalog.membersOf(uri)) {
+        const chat = this.catalog.chatOf(id);
+        if (!this.core.hasSubscribers(chat)) {
+          await this.bridges.get(id)?.detach();
+        }
+      }
       this.dropIdleSession(uri);
       return;
     }
@@ -262,12 +277,28 @@ export class HydraBackend implements Backend {
       case "disposeChat":
         return this.disposeChat(body);
       case "resolveSessionConfig":
-        return { schema: { type: "object", properties: {} }, values: {} };
+        return this.resolveSessionConfig(body);
       case "fetchTurns":
         return this.fetchTurns(body);
       default:
         throw new RpcError(ErrorCodes.MethodNotFound, `method not found: ${method}`);
     }
+  }
+
+  // The settings a new session of this agent will offer: the set last seen from a session of it, with the client's picks applied.
+  private resolveSessionConfig(params: Record<string, unknown>): { schema: object; values: Record<string, unknown> } {
+    const provider = typeof params.provider === "string" ? params.provider : this.catalog.agents()[0]?.provider;
+    const state = toConfigState(this.catalog.knownConfigFor(provider));
+    if (!state) {
+      return { schema: { type: "object", properties: {} }, values: {} };
+    }
+    const picks = (params.config ?? {}) as Record<string, unknown>;
+    const values: Record<string, unknown> = {};
+    for (const [key, schema] of Object.entries(state.schema.properties)) {
+      const pick = picks[key];
+      values[key] = typeof pick === "string" && schema.enum?.includes(pick) ? pick : state.values[key];
+    }
+    return { schema: state.schema, values };
   }
 
   private async fetchTurns(params: Record<string, unknown>): Promise<Record<string, never>> {
@@ -316,18 +347,23 @@ export class HydraBackend implements Backend {
       },
       channel,
     );
-    const chat = chatUri(sessionKey(channel));
+    const chat = defaultChatUri(channel);
+    const offered = this.resolveSessionConfig({ provider, config: params.config });
+    const picks = Object.fromEntries(
+      Object.entries(offered.values).filter((pair): pair is [string, string] => typeof pair[1] === "string"),
+    );
+    const config = Object.keys(offered.values).length > 0 ? ({ schema: offered.schema, values: offered.values } as SessionConfigState) : undefined;
     this.catalog.beginCreation(channel, summary);
-    this.core.createChannel(channel, summaryToSessionState(summary, "creating"));
+    this.core.createChannel(channel, summaryToSessionState(summary, "creating", config));
     this.core.createChannel(chat, emptyChat(chat, summary.title, now, STATUS_IDLE));
-    const finishing = this.finishCreation(channel, provider, cwd).finally(() => {
+    const finishing = this.finishCreation(channel, provider, cwd, picks).finally(() => {
       this.creating.delete(channel);
     });
     this.creating.set(channel, finishing);
     return null;
   }
 
-  private async finishCreation(channel: string, provider: string | undefined, cwd: string | undefined): Promise<void> {
+  private async finishCreation(channel: string, provider: string | undefined, cwd: string | undefined, picks: Record<string, string>): Promise<void> {
     let hydraId: string | undefined;
     try {
       const created = await this.rest.createSession({
@@ -340,11 +376,14 @@ export class HydraBackend implements Backend {
       this.catalog.claim(hydraId, channel, entry);
       this.core.publish(channel, action({ type: "session/ready" }));
       // A client may have subscribed to the chat while the session was being created.
-      const chat = chatUri(sessionKey(channel));
-      if (this.core.hasSubscribers(chat)) {
+      const chat = defaultChatUri(channel);
+      if (this.core.hasSubscribers(chat) || Object.keys(picks).length > 0) {
         await this.bridgeFor(chat)?.attach().catch((err) => {
           log.warn(`attach after creating ${channel} failed`, message(err));
         });
+      }
+      if (Object.keys(picks).length > 0) {
+        await this.bridgeFor(chat)?.applyInitialConfig(picks);
       }
     } catch (err) {
       log.warn(`createSession ${channel} failed`, message(err));
@@ -358,7 +397,7 @@ export class HydraBackend implements Backend {
       );
       setTimeout(() => {
         this.core.removeChannel(channel);
-        this.core.removeChannel(chatUri(sessionKey(channel)));
+        this.core.removeChannel(defaultChatUri(channel));
       }, FAILED_CHANNEL_LINGER_MS).unref();
     }
   }

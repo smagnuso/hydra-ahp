@@ -47,6 +47,7 @@ describe("hydra version gate", () => {
             tokensPath: "/nonexistent/tokens.json",
             flagsPath: "/nonexistent/flags.json",
             modelsPath: "/nonexistent/models.json",
+            configsPath: "/nonexistent/configs.json",
           },
           "0.0.0",
         ),

@@ -25,6 +25,7 @@ export interface AttachOptions {
 export interface AttachResult {
   meta: Json;
   clientId?: string;
+  configOptions?: unknown;
 }
 
 export type SteeringOutcome = "injected" | "startedNewTurn" | "promptRequired" | "failed";
@@ -107,7 +108,11 @@ export class HydraSessions {
       }),
     );
     const clientId = text(result.clientId);
-    return { meta: bag(bag(result._meta)[HYDRA_META]), ...(clientId ? { clientId } : {}) };
+    return {
+      meta: bag(bag(result._meta)[HYDRA_META]),
+      ...(clientId ? { clientId } : {}),
+      ...(result.configOptions !== undefined ? { configOptions: result.configOptions } : {}),
+    };
   }
 
   // Resolves when the turn ends; onSettle sees the outcome in wire order with the session's notifications.
@@ -144,6 +149,12 @@ export class HydraSessions {
 
   async setModel(hydraId: string, modelId: string): Promise<void> {
     await this.client.request("session/set_model", { sessionId: hydraId, modelId });
+  }
+
+  // Resolves to the agent's whole option set after the change; Hydra forwards everything except its own agent selector.
+  async setConfigOption(hydraId: string, configId: string, value: string): Promise<unknown> {
+    const result = bag(await this.client.request("session/set_config_option", { sessionId: hydraId, configId, value }));
+    return result.configOptions;
   }
 
   async delete(hydraId: string): Promise<void> {

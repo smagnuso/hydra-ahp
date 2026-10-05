@@ -8,6 +8,7 @@ import { logger } from "../util/log.js";
 import { sideChatOrigin, type Catalog } from "./catalog.js";
 import { ChatMapper, type Frame } from "./mapping.js";
 import { UnsupportedContent, chooseOption, confirmationOptions, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
+import { optionIdOf, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
 import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, summaryToSessionState, withFlagBits } from "./summary.js";
 import { HYDRA_META, bag, text, type Json } from "./turns.js";
@@ -243,7 +244,7 @@ export class SessionBridge implements SessionListener {
     if (!summary) {
       throw new RpcError(SESSION_NOT_FOUND, "Session not found");
     }
-    core.createChannel(sessionUri, summaryToSessionState(summary, "ready"));
+    core.createChannel(sessionUri, summaryToSessionState(summary, "ready", catalog.configStateFor(sessionUri)));
   }
 
   private async doAttach(forceLive: boolean): Promise<void> {
@@ -257,7 +258,9 @@ export class SessionBridge implements SessionListener {
       await this.release();
     }
     const { core, rest, sessions, hydraId, chatUri } = this.deps;
-    this.ensureSessionChannel();
+    if (!core.store.has(this.deps.sessionUri) && !this.deps.catalog.summaryFor(this.deps.sessionUri)) {
+      throw new RpcError(SESSION_NOT_FOUND, "Session not found");
+    }
     const own = this.entry();
     // A fork nobody has attached yet only gets its history when its agent loads it, which a read-only viewer never triggers.
     const pristineFork = own?.forkedFromSessionId !== undefined && !own.upstreamSessionId;
@@ -269,12 +272,14 @@ export class SessionBridge implements SessionListener {
     let history: Frame[];
     let cursor: string | undefined;
     let meta: Json;
+    let configOptions: unknown;
     let joined = false;
     try {
       if (viewer) {
         const result = await sessions.attach(hydraId, { readonly: true, history: "full" });
         joined = true;
         meta = result.meta;
+        configOptions = result.configOptions;
         this.clientId = undefined;
         history = pending.splice(0).flatMap((event) => (event.kind === "frame" ? [event.frame] : []));
         const first = oldestSeq(history);
@@ -284,6 +289,7 @@ export class SessionBridge implements SessionListener {
         const result = await sessions.attach(hydraId, { readonly: false, history: "pending_only" });
         joined = true;
         meta = result.meta;
+        configOptions = result.configOptions;
         this.meta = meta;
         this.clientId = result.clientId;
         const page = await rest.historyPage(hydraId, Number.MAX_SAFE_INTEGER, INITIAL_TURNS);
@@ -308,6 +314,8 @@ export class SessionBridge implements SessionListener {
     }
 
     this.deps.catalog.noteModels(this.entry()?.agentId, meta.availableModels);
+    this.deps.catalog.noteConfig(hydraId, parseConfigOptions(configOptions));
+    this.ensureSessionChannel();
 
     const side = this.deps.catalog.sideOf(hydraId);
 
@@ -492,8 +500,93 @@ export class SessionBridge implements SessionListener {
       this.commands = frame.update.availableCommands;
       return;
     }
+    if (kind === "config_option_update") {
+      this.applyConfig(parseConfigOptions(frame.update.configOptions));
+      return;
+    }
     sink(this.mapper.map(frame));
     this.maybeSteer();
+  }
+
+  // Keeps the session's settings in step with what Hydra reports; only the default chat speaks for the session.
+  private applyConfig(options: ConfigOption[]): void {
+    if (this.deps.catalog.noteConfig(this.deps.hydraId, options)) {
+      this.syncConfigValues();
+    }
+  }
+
+  private syncConfigValues(): void {
+    const { core, catalog, sessionUri, hydraId } = this.deps;
+    const held = (core.store.state(sessionUri) as SessionState | undefined)?.config;
+    const current = catalog.configStateFor(sessionUri)?.values;
+    if (!held || !current || !catalog.isDefaultMember(hydraId)) {
+      return;
+    }
+    const next: Record<string, unknown> = {};
+    for (const key of Object.keys(held.schema.properties)) {
+      next[key] = current[key] ?? held.values[key];
+    }
+    if (JSON.stringify(next) !== JSON.stringify(held.values)) {
+      core.publish(sessionUri, action({ type: "session/configChanged", config: next, replace: true }));
+    }
+  }
+
+  // Settings a client chose while creating the session are applied once the agent is up, then the channel shows what Hydra reports.
+  async applyInitialConfig(picks: Record<string, string>): Promise<void> {
+    const { sessions, catalog, hydraId } = this.deps;
+    await this.ensureLive();
+    for (const [property, value] of Object.entries(picks)) {
+      const optionId = optionIdOf(property);
+      const known = catalog.configOptionsFor(hydraId).find((option) => option.id === optionId);
+      if (optionId === undefined || !known || known.currentValue === value) {
+        continue;
+      }
+      try {
+        catalog.noteConfig(hydraId, parseConfigOptions(await sessions.setConfigOption(hydraId, optionId, value)));
+      } catch (err) {
+        log.warn(`initial setting ${optionId}=${value} for ${hydraId} failed`, message(err));
+      }
+    }
+    this.syncConfigValues();
+  }
+
+  // A client picks a setting: Hydra applies it (agents may clamp or reshape the others), then the session shows what Hydra now reports.
+  private async setConfig(body: Json): Promise<ActionDecision> {
+    const { core, sessions, catalog, sessionUri, hydraId } = this.deps;
+    const config = (core.store.state(sessionUri) as SessionState | undefined)?.config;
+    if (!config) {
+      return refuse("this session has no settings");
+    }
+    if (body.replace === true) {
+      return refuse("settings are changed one at a time");
+    }
+    const changes: Array<[string, string]> = [];
+    for (const [property, value] of Object.entries(bag(body.config))) {
+      const schema = config.schema.properties[property];
+      const optionId = optionIdOf(property);
+      if (!schema || optionId === undefined) {
+        return refuse(`unknown setting ${property}`);
+      }
+      if (!schema.sessionMutable) {
+        return refuse(`${property} cannot be changed`);
+      }
+      if (typeof value !== "string" || !schema.enum?.includes(value)) {
+        return refuse(`${String(value)} is not a valid value for ${property}`);
+      }
+      if (config.values[property] !== value) {
+        changes.push([optionId, value]);
+      }
+    }
+    try {
+      await this.ensureLive();
+      for (const [optionId, value] of changes) {
+        catalog.noteConfig(hydraId, parseConfigOptions(await sessions.setConfigOption(hydraId, optionId, value)));
+      }
+    } catch (err) {
+      return refuse(message(err));
+    }
+    setImmediate(() => this.syncConfigValues());
+    return ACCEPT;
   }
 
   // Read and archive marks are one pair per session; the session and chat channels mirror each other.
@@ -677,6 +770,9 @@ export class SessionBridge implements SessionListener {
       }
       if (next.type === "session/activeClientSet" || next.type === "session/activeClientRemoved") {
         return ACCEPT;
+      }
+      if (next.type === "session/configChanged") {
+        return this.setConfig(body);
       }
       return refuse("this host does not accept that action");
     }

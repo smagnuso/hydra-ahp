@@ -5,6 +5,7 @@ import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.
 import { act, openSession, type Session } from "../support/harness.js";
 import { ReducerOracle } from "../support/oracle.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
+import { chatOf } from "../support/chat-uri.js";
 
 describe("agent-initiated turns and attach mid-turn against a scratch daemon", () => {
   let daemon: ScratchDaemon;
@@ -169,7 +170,7 @@ class Reconnecting {
     const session = await openSession(`ws://127.0.0.1:${daemon.ahpPort}/?tkn=${encodeURIComponent(token)}`);
     const client = new Reconnecting(daemon, token, session);
     await session.client.initialize({ clientId: client.clientId, protocolVersions: ["0.9.0"], initialSubscriptions: [ROOT] });
-    for (const uri of [`ahp-session:/${id}`, `ahp-chat:/${id}`]) {
+    for (const uri of [`ahp-session:/${id}`, chatOf(id)]) {
       client.oracle.applySnapshot((await session.client.subscribe(uri)).result.snapshot as Snapshot);
     }
     return client;
@@ -217,7 +218,7 @@ class Reconnecting {
       this.oracle.applyEnvelope(envelope);
     }
     this.applied = this.session.events.length;
-    return this.oracle.state(`ahp-chat:/${id}`) as ChatState;
+    return this.oracle.state(chatOf(id)) as ChatState;
   }
 
   until<T>(id: string, what: string, probe: (chat: ChatState) => T | undefined | false): Promise<T> {
@@ -225,7 +226,7 @@ class Reconnecting {
   }
 
   async dispatch(id: string, action: Record<string, unknown>): Promise<ActionEnvelope> {
-    const { clientSeq } = this.session.client.dispatch(`ahp-chat:/${id}`, act(action));
+    const { clientSeq } = this.session.client.dispatch(chatOf(id), act(action));
     const echo = await this.session.waitFor((e) => e.origin?.clientSeq === clientSeq, 5000);
     expect(echo.rejectionReason, `${String(action.type)} rejected`).toBeUndefined();
     return echo;

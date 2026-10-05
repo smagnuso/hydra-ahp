@@ -5,8 +5,9 @@ import type { Frame } from "../src/bridge/mapping.js";
 import { ReducerOracle, framesFromNotifications, framesFromHistory, type HistoryRow, type RecordedFrame } from "./support/oracle.js";
 import { ROW, startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 import { act, sleep, type Session } from "./support/harness.js";
+import { chatOf } from "./support/chat-uri.js";
 
-const CHAT = "ahp-chat:/h1";
+const CHAT = chatOf("h1");
 const SESSION = "ahp-session:/h1";
 const ROOT = "ahp-root://";
 
@@ -49,7 +50,7 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     await harness.stop();
   });
 
-  it("attaches on the first chat subscription and builds the snapshot from the replay", async () => {
+  it("attaches once for a live session's settings and builds the chat snapshot from the replay", async () => {
     harness = await startBridgeHarness((hydra) => {
       hydra.newest = newest;
       hydra.meta = { busy: false };
@@ -57,9 +58,10 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     const session = await harness.connect();
     await session.client.initialize({ clientId: "c1", protocolVersions: [version], initialSubscriptions: [ROOT] });
     await session.client.subscribe(SESSION);
-    expect(harness.hydra.attaches).toEqual([]);
+    const attach = { id: "h1", readonly: false, history: "pending_only" };
+    expect(harness.hydra.attaches).toEqual([attach]);
     const sub = await session.client.subscribe(CHAT);
-    expect(harness.hydra.attaches).toEqual([{ id: "h1", readonly: false, history: "pending_only" }]);
+    expect(harness.hydra.attaches).toEqual([attach]);
     const chat = (sub.result.snapshot as Snapshot).state as ChatState;
     expect(chat.turns.map((turn) => turn.state)).toEqual(["complete", "complete", "error", "cancelled"]);
     expect(chat.activeTurn).toBeUndefined();

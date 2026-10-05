@@ -4,6 +4,7 @@ import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.
 import { act, openSession } from "../support/harness.js";
 import { ReducerOracle } from "../support/oracle.js";
 import { ScratchDaemon, until } from "../support/scratch.js";
+import { defaultChatUri } from "../../src/bridge/ids.js";
 
 // Clients such as VS Code create a session under a URI they pick, "<provider>:/<id>", and pipeline their calls.
 describe("a client-created session with a provider-scheme URI", () => {
@@ -70,7 +71,7 @@ describe("a client-created session with a provider-scheme URI", () => {
 
   it("runs a turn dispatched before the new session is ready and streams it to a chat subscribed during creation", async () => {
     const early = "fake:/0b8e6c55-3c1e-4d0a-8d57-5a0f2a3b7c21";
-    const chat = "ahp-chat:/0b8e6c55-3c1e-4d0a-8d57-5a0f2a3b7c21";
+    const chat = defaultChatUri(early);
     await ahp.session.client.request("createSession", { channel: early, provider: "fake", workingDirectories: ["file:///tmp"] } as never);
     const oracle = new ReducerOracle();
     oracle.applySnapshot((await ahp.session.client.subscribe(early)).result.snapshot as Snapshot);
@@ -106,7 +107,7 @@ describe("a client-created session with a provider-scheme URI", () => {
     });
     await until("listed again", async () => (await items()).find((item) => item.resource === channel));
     const again = await ahp.session.client.subscribe(channel);
-    expect((again.result.snapshot?.state as SessionState).defaultChat).toBe(`ahp-chat:/${channel.slice("fake:/".length)}`);
+    expect((again.result.snapshot?.state as SessionState).defaultChat).toBe(defaultChatUri(channel));
     await ahp.session.client.request("disposeSession", { channel } as never);
     await until("gone", async () => ((await items()).some((item) => item.resource === channel) ? undefined : true));
   });

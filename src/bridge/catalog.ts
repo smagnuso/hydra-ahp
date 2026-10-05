@@ -1,13 +1,15 @@
-import type { AgentInfo, RootState, SessionSummary } from "@microsoft/agent-host-protocol";
+import type { AgentInfo, RootState, SessionConfigState, SessionSummary } from "@microsoft/agent-host-protocol";
 import { ROOT_URI } from "../protocol/channels.js";
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { HydraAgent, HydraRest, HydraSessionEntry, SessionPage } from "../hydra/rest.js";
 import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
-import { chatKey, chatUri, isChatUri, isFederatedId, isNativeSessionUri, sessionKey, sessionUri } from "./ids.js";
+import { chatKey, defaultChatUri, isChatUri, isFederatedId, isNativeSessionUri, sessionOfDefaultChat, sessionUri } from "./ids.js";
 import { NO_FLAGS, type FlagStore, type SessionFlags } from "../store/flags.js";
+import type { ConfigStore } from "../store/configs.js";
 import type { KnownModel, ModelStore } from "../store/models.js";
+import { toConfigState, type ConfigOption } from "./config.js";
 import { groupToSummary, type GroupMember } from "./summary.js";
 
 const log = logger("catalog");
@@ -24,6 +26,7 @@ export interface CatalogOptions {
   extState: ExtensionState;
   flags?: FlagStore;
   models?: ModelStore;
+  configs?: ConfigStore;
   pollMs?: number;
   warmPollMs?: number;
   agentsEveryPolls?: number;
@@ -123,7 +126,7 @@ export class Catalog {
   }
 
   chatOf(hydraId: string): string {
-    return this.chatStamps.get(hydraId)?.chat ?? chatUri(sessionKey(this.groupOf(hydraId)));
+    return this.chatStamps.get(hydraId)?.chat ?? defaultChatUri(this.groupOf(hydraId));
   }
 
   sideOf(hydraId: string): SideOrigin | undefined {
@@ -153,7 +156,7 @@ export class Catalog {
     if (id) {
       return this.groupOf(id);
     }
-    return this.pendingChats.get(chat) ?? sessionUri(chatKey(chat));
+    return this.pendingChats.get(chat) ?? sessionOfDefaultChat(chat) ?? sessionUri(chatKey(chat));
   }
 
   flagsFor(hydraId: string): SessionFlags {
@@ -294,6 +297,7 @@ export class Catalog {
     this.options.flags?.forget(id);
     this.stamps.delete(id);
     this.chatStamps.delete(id);
+    this.liveConfigs.delete(id);
     this.lookedUp.delete(id);
   }
 
@@ -424,7 +428,7 @@ export class Catalog {
     for (const chat of summary?.chats ?? []) {
       this.core.removeChannel(chat.resource);
     }
-    this.core.removeChannel(chatUri(sessionKey(uri)));
+    this.core.removeChannel(defaultChatUri(uri));
   }
 
   private syncRoot(): void {
@@ -476,6 +480,39 @@ export class Catalog {
     }
   }
 
+  // The config options each attached Hydra session last reported; the session channel shows its default chat's.
+  private readonly liveConfigs = new Map<string, ConfigOption[]>();
+
+  // Returns whether this session's options changed; the agent's last-seen set is kept for sessions not yet created.
+  noteConfig(hydraId: string, options: readonly ConfigOption[]): boolean {
+    if (options.length === 0) {
+      return false;
+    }
+    const agentId = this.entries.get(hydraId)?.agentId;
+    if (agentId) {
+      this.options.configs?.set(agentId, options);
+    }
+    if (JSON.stringify(this.liveConfigs.get(hydraId)) === JSON.stringify(options)) {
+      return false;
+    }
+    this.liveConfigs.set(hydraId, [...options]);
+    return true;
+  }
+
+  configOptionsFor(hydraId: string): ConfigOption[] {
+    return this.liveConfigs.get(hydraId) ?? [];
+  }
+
+  knownConfigFor(agentId: string | undefined): ConfigOption[] {
+    return agentId ? this.options.configs?.get(agentId) ?? [] : [];
+  }
+
+  // The settings of a session: its default chat's live options.
+  configStateFor(sessionUri: string): SessionConfigState | undefined {
+    const lead = this.membersOf(sessionUri)[0];
+    return lead ? toConfigState(this.configOptionsFor(lead)) : undefined;
+  }
+
   // Paging is keyset based (newest first) so a concurrent change never repeats or skips a row.
   list(limit: number | undefined, cursor: string | undefined): { items: SessionSummary[]; nextCursor?: string } {
     const size = Math.min(Math.max(Math.trunc(limit ?? DEFAULT_PAGE_SIZE) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
@@ -495,14 +532,14 @@ export class Catalog {
   // Registers a session this extension is creating so the first poll cannot hide or duplicate it.
   beginCreation(uri: string, summary: SessionSummary): void {
     this.pendingCreations.add(uri);
-    this.pendingChats.set(chatUri(sessionKey(uri)), uri);
+    this.pendingChats.set(defaultChatUri(uri), uri);
     this.published.set(uri, summary);
     this.core.notify(ROOT_URI, "root/sessionAdded", { channel: ROOT_URI, summary });
   }
 
   failCreation(uri: string): void {
     this.pendingCreations.delete(uri);
-    this.pendingChats.delete(chatUri(sessionKey(uri)));
+    this.pendingChats.delete(defaultChatUri(uri));
     this.published.delete(uri);
     this.core.notify(ROOT_URI, "root/sessionRemoved", { channel: ROOT_URI, session: uri });
   }
@@ -512,7 +549,7 @@ export class Catalog {
     this.lookedUp.add(hydraId);
     this.entries.set(hydraId, entry);
     this.pendingCreations.delete(uri);
-    this.pendingChats.delete(chatUri(sessionKey(uri)));
+    this.pendingChats.delete(defaultChatUri(uri));
     this.reconcile();
   }
 

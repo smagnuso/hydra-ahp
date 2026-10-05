@@ -12,6 +12,21 @@ export function chatUri(id: string): string {
   return `${CHAT_PREFIX}${id}`;
 }
 
+const DEFAULT_CHAT_PREFIX = "ahp-chat://default/";
+
+// VS Code addresses a session's default chat as ahp-chat://default/<base64url of the session URI>, whatever the session state lists.
+export function defaultChatUri(session: string): string {
+  return `${DEFAULT_CHAT_PREFIX}${Buffer.from(session, "utf8").toString("base64url")}`;
+}
+
+export function sessionOfDefaultChat(chat: string): string | undefined {
+  if (!chat.startsWith(DEFAULT_CHAT_PREFIX)) {
+    return undefined;
+  }
+  const decoded = Buffer.from(chat.slice(DEFAULT_CHAT_PREFIX.length), "base64url").toString("utf8");
+  return decoded === "" ? undefined : decoded;
+}
+
 const SCHEME = /^[a-z][a-z0-9+.-]*:\//i;
 
 export function isSessionUri(uri: string): boolean {

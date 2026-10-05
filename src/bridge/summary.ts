@@ -1,7 +1,7 @@
-import type { SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
+import type { SessionConfigState, SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
 import type { HydraSessionEntry } from "../hydra/rest.js";
 import { NO_FLAGS, type SessionFlags } from "../store/flags.js";
-import { chatUri, cwdToUri, isFederatedId, sessionKey } from "./ids.js";
+import { cwdToUri, defaultChatUri, isFederatedId } from "./ids.js";
 
 export const STATUS_IDLE = 1;
 export const STATUS_IN_PROGRESS = 8;
@@ -91,12 +91,13 @@ export function groupToSummary(members: readonly GroupMember[], uri: string): Se
 }
 
 export function entryToSummary(entry: HydraSessionEntry, uri: string, flags: SessionFlags = NO_FLAGS): SessionSummary {
-  return groupToSummary([{ entry, chat: chatUri(sessionKey(uri)), flags }], uri);
+  return groupToSummary([{ entry, chat: defaultChatUri(uri), flags }], uri);
 }
 
 export function summaryToSessionState(
   summary: SessionSummary,
   lifecycle: "creating" | "ready",
+  config?: SessionConfigState,
 ): SessionState {
   const chats = (summary.chats ?? []).map((chat) => ({
     resource: chat.resource,
@@ -111,6 +112,7 @@ export function summaryToSessionState(
     activeClients: [],
     chats,
     ...(summary.defaultChat ? { defaultChat: summary.defaultChat } : {}),
+    ...(config ? { config } : {}),
     ...(_meta ? { _meta } : {}),
   } as unknown as SessionState;
 }

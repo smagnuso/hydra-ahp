@@ -4,6 +4,7 @@ import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.
 import { ReducerOracle } from "../support/oracle.js";
 import { openSession } from "../support/harness.js";
 import { ScratchDaemon, sleep, until } from "../support/scratch.js";
+import { chatOf } from "../support/chat-uri.js";
 
 async function listed(ahp: AhpConnection, id: string): Promise<boolean> {
   const result = (await ahp.session.client.request("listSessions", { channel: ROOT } as never)) as unknown as {
@@ -40,7 +41,7 @@ describe("read path against a scratch daemon", () => {
     const oracle = new ReducerOracle();
     const session = await ahp.session.client.subscribe(`ahp-session:/${id}`);
     oracle.applySnapshot(session.result.snapshot as Snapshot);
-    const chat = await ahp.session.client.subscribe(`ahp-chat:/${id}`);
+    const chat = await ahp.session.client.subscribe(chatOf(id));
     oracle.applySnapshot(chat.result.snapshot as Snapshot);
     return { oracle, chat: (chat.result.snapshot as Snapshot).state as ChatState };
   }
@@ -71,7 +72,7 @@ describe("read path against a scratch daemon", () => {
     } as never);
     const echo = await ahp.session.waitFor((e) => e.origin?.clientSeq === clientSeq, 5000);
     expect(echo.rejectionReason).toBeUndefined();
-    await ahp.session.client.unsubscribe(`ahp-chat:/${id}`);
+    await ahp.session.client.unsubscribe(chatOf(id));
     await ahp.session.client.unsubscribe(sessionUri);
   });
 
@@ -90,7 +91,7 @@ describe("read path against a scratch daemon", () => {
     ]);
     expect(await attachedClients(id)).toBe(before + 1);
 
-    await ahp.session.client.unsubscribe(`ahp-chat:/${id}`);
+    await ahp.session.client.unsubscribe(chatOf(id));
     await until("hydra detach", async () => (await attachedClients(id)) === before);
   });
 
@@ -99,21 +100,21 @@ describe("read path against a scratch daemon", () => {
     const { oracle } = await subscribe(id);
     const marker = ahp.session.events.length;
     const turn = driver.prompt(id, "script:slow");
-    await ahp.session.waitFor((e) => e.channel === `ahp-chat:/${id}` && e.action.type === "chat/delta" && (e.action as { content?: string }).content === "start ");
-    const mid = oracle.state(`ahp-chat:/${id}`) as ChatState;
+    await ahp.session.waitFor((e) => e.channel === chatOf(id) && e.action.type === "chat/delta" && (e.action as { content?: string }).content === "start ");
+    const mid = oracle.state(chatOf(id)) as ChatState;
     void mid;
     await turn;
-    await ahp.session.waitFor((e) => e.channel === `ahp-chat:/${id}` && e.action.type === "chat/turnComplete" && ahp.session.events.indexOf(e) >= marker);
+    await ahp.session.waitFor((e) => e.channel === chatOf(id) && e.action.type === "chat/turnComplete" && ahp.session.events.indexOf(e) >= marker);
     for (const envelope of ahp.session.events) {
       oracle.applyEnvelope(envelope);
     }
-    const chat = oracle.state(`ahp-chat:/${id}`) as ChatState;
+    const chat = oracle.state(chatOf(id)) as ChatState;
     expect(chat.activeTurn).toBeUndefined();
     expect(chat.turns.map((t) => t.message.text)).toEqual(["ping", "script:slow"]);
     expect(chat.turns[1]!.responseParts).toMatchObject([{ kind: "markdown", content: "start finish" }]);
 
-    await ahp.session.client.unsubscribe(`ahp-chat:/${id}`);
-    const again = await ahp.session.client.subscribe(`ahp-chat:/${id}`);
+    await ahp.session.client.unsubscribe(chatOf(id));
+    const again = await ahp.session.client.subscribe(chatOf(id));
     const fresh = (again.result.snapshot as Snapshot).state as ChatState;
     expect(fresh.turns.map((t) => ({ ...t, usage: undefined }))).toEqual(chat.turns.map((t) => ({ ...t, usage: undefined })));
   });
@@ -142,11 +143,11 @@ describe("read path against a scratch daemon", () => {
     expect(chat.activeTurn).toBeDefined();
     expect(chat.status & 8).toBe(8);
     await turn;
-    await ahp.session.waitFor((e) => e.channel === `ahp-chat:/${id}` && e.action.type === "chat/turnComplete");
+    await ahp.session.waitFor((e) => e.channel === chatOf(id) && e.action.type === "chat/turnComplete");
     for (const envelope of ahp.session.events) {
       oracle.applyEnvelope(envelope);
     }
-    const done = oracle.state(`ahp-chat:/${id}`) as ChatState;
+    const done = oracle.state(chatOf(id)) as ChatState;
     expect(done.activeTurn).toBeUndefined();
     expect(done.turns.at(-1)).toMatchObject({ state: "complete" });
   });
@@ -155,14 +156,14 @@ describe("read path against a scratch daemon", () => {
     const id = await prompted("ping");
     const { oracle } = await subscribe(id);
     const turn = driver.client.request("session/prompt", { sessionId: id, prompt: [{ type: "text", text: "script:hang" }] });
-    await ahp.session.waitFor((e) => e.channel === `ahp-chat:/${id}` && e.action.type === "chat/toolCallStart");
+    await ahp.session.waitFor((e) => e.channel === chatOf(id) && e.action.type === "chat/toolCallStart");
     driver.client.peer.notify("session/cancel", { sessionId: id });
     await turn;
-    await ahp.session.waitFor((e) => e.channel === `ahp-chat:/${id}` && e.action.type === "chat/turnCancelled");
+    await ahp.session.waitFor((e) => e.channel === chatOf(id) && e.action.type === "chat/turnCancelled");
     for (const envelope of ahp.session.events) {
       oracle.applyEnvelope(envelope);
     }
-    const chat = oracle.state(`ahp-chat:/${id}`) as ChatState;
+    const chat = oracle.state(chatOf(id)) as ChatState;
     expect(chat.turns.at(-1)).toMatchObject({ state: "cancelled" });
     expect(chat.activeTurn).toBeUndefined();
   });
@@ -176,7 +177,7 @@ describe("read path against a scratch daemon", () => {
     const { chat } = await subscribe(id);
     expect(chat.turns).toHaveLength(1);
     expect(await statusOf(id)).toBe("cold");
-    await ahp.session.client.unsubscribe(`ahp-chat:/${id}`);
+    await ahp.session.client.unsubscribe(chatOf(id));
   });
 
   it("leaves permission requests to the other clients", async () => {
@@ -185,12 +186,12 @@ describe("read path against a scratch daemon", () => {
     driver.permissionAnswer = "allow";
     const text = await driver.prompt(id, "permission please");
     expect(text).toContain("permission:allow");
-    await ahp.session.client.unsubscribe(`ahp-chat:/${id}`);
+    await ahp.session.client.unsubscribe(chatOf(id));
   });
 
   it("builds an exact transcript when clients attach and detach in the middle of a stream", async () => {
     const id = await prompted("ping");
-    const chat = `ahp-chat:/${id}`;
+    const chat = chatOf(id);
     const turn = driver.prompt(id, "script:flood");
     await sleep(500);
     const { oracle } = await subscribe(id);
@@ -227,6 +228,6 @@ describe("read path against a scratch daemon", () => {
     const { chat } = await subscribe(id);
     expect(chat.turns).toHaveLength(4);
     expect(chat.turnsNextCursor).toBeUndefined();
-    await ahp.session.client.unsubscribe(`ahp-chat:/${id}`);
+    await ahp.session.client.unsubscribe(chatOf(id));
   });
 });

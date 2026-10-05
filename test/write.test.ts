@@ -4,8 +4,9 @@ import { MAX_IMAGE_BYTES, UnsupportedContent, chooseOption, confirmationOptions,
 import { ReducerOracle } from "./support/oracle.js";
 import { startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 import { act, sleep, type Session } from "./support/harness.js";
+import { chatOf } from "./support/chat-uri.js";
 
-const CHAT = "ahp-chat:/h1";
+const CHAT = chatOf("h1");
 const SESSION = "ahp-session:/h1";
 const ROOT = "ahp-root://";
 

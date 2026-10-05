@@ -24,6 +24,33 @@ let cancelHang;
 const nativeSteering = process.argv.includes("--steering");
 // --models advertises two models and records session/set_model calls.
 const withModels = process.argv.includes("--models");
+// --config advertises effort and fast options and records session/set_config_option calls; turning fast on drops effort to low.
+const withConfig = process.argv.includes("--config");
+const settings = { effort: "medium", fast: "off" };
+const configOptions = () => [
+  {
+    id: "effort",
+    name: "Effort",
+    description: "How hard the agent thinks",
+    type: "select",
+    currentValue: settings.effort,
+    options: [
+      { value: "low", name: "Low" },
+      { value: "medium", name: "Medium", description: "The default" },
+      { value: "high", name: "High" },
+    ],
+  },
+  {
+    id: "fast",
+    name: "Fast mode",
+    type: "select",
+    currentValue: settings.fast,
+    options: [
+      { value: "off", name: "Off" },
+      { value: "on", name: "On" },
+    ],
+  },
+];
 // What this agent process saw, in order; a script:log prompt reads it back.
 const log = [];
 // The running script:wait turn, if any: a steer or cancel settles it.
@@ -296,11 +323,20 @@ rl.on("line", (line) => {
       id: message.id,
       result: {
         sessionId: `fake-${process.pid}-${++counter}`,
+        ...(withConfig ? { configOptions: configOptions() } : {}),
         ...(withModels
           ? { models: { currentModelId: "m1", availableModels: [{ modelId: "m1", name: "Model One" }, { modelId: "m2", name: "Model Two" }] } }
           : {}),
       },
     });
+  } else if (message.method === "session/set_config_option" && withConfig) {
+    const { configId, value } = message.params ?? {};
+    log.push(`config:${configId}=${value}`);
+    settings[configId] = value;
+    if (configId === "fast" && value === "on") {
+      settings.effort = "low";
+    }
+    send({ jsonrpc: "2.0", id: message.id, result: { configOptions: configOptions() } });
   } else if (message.method === "session/set_model") {
     log.push(`model:${message.params?.modelId}`);
     send({ jsonrpc: "2.0", id: message.id, result: {} });
