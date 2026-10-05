@@ -33,6 +33,7 @@ export interface GroupMember {
   entry: HydraSessionEntry;
   chat: string;
   flags: SessionFlags;
+  origin?: Record<string, unknown>;
 }
 
 export const UNTITLED_CHAT = "Untitled chat";
@@ -75,6 +76,7 @@ export function groupToSummary(members: readonly GroupMember[], uri: string): Se
       title: member.entry.title || (member === lead ? title : UNTITLED_CHAT),
       status: withFlagBits(statusBits(member.entry), member.flags),
       modifiedAt: member.entry.updatedAt ?? modifiedAt,
+      ...(member.origin ? { origin: member.origin } : {}),
     })),
     defaultChat: lead.chat,
   };

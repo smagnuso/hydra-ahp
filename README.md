@@ -8,7 +8,7 @@ Runs as a Hydra extension: AHP over WebSocket upstream, Hydra's `/acp` and
 
 An AHP session is a group of Hydra sessions, each one a chat. A session
 nobody added chats to is a group of one. `createChat` adds a Hydra session to
-the group (a fork when the client names a source turn), `disposeChat` deletes
+the group (a fork or side chat when the client names a source turn), `disposeChat` deletes
 one, and `disposeSession` deletes them all.
 
 ## Install and register
@@ -143,8 +143,10 @@ token leaks, `token revoke <id>` closes its connections immediately.
 - Loopback only; no TLS and no remote access.
 - New sessions are created on the local Hydra only, not on federated remotes
   (existing federated sessions are listed and driven, ids stay `name:localId`).
-- Chats: fork sources are supported, side chats and `moveChat` are not. A forked chat shows
-  its copied history once its agent has loaded it. Federated sessions stay single-chat.
+- Chats: fork and side chat sources are supported, `moveChat` is not. A forked chat shows
+  its copied history once its agent has loaded it; a side chat shows only its own turns
+  (the daemon's `POST /v1/sessions/:id/side` marks the copied history as context, so side
+  chats need a daemon that has it). Federated sessions stay single-chat.
 - 1.0-only features (such as chat summaries in `SessionSummary`) wait until
   VS Code negotiates 1.0.0.
 

@@ -59,9 +59,9 @@ describe("several chats in one session against a scratch daemon", () => {
     await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete" && (e.action as { turnId?: string }).turnId === turnId, 15000);
   }
 
-  it("advertises multiple chats with fork on every agent", () => {
+  it("advertises multiple chats with fork and side chats on every agent", () => {
     for (const agent of ahp.root.agents) {
-      expect(agent.capabilities?.multipleChats).toEqual({ fork: true });
+      expect(agent.capabilities?.multipleChats).toEqual({ fork: true, sideChat: true });
     }
   });
 
@@ -114,6 +114,30 @@ describe("several chats in one session against a scratch daemon", () => {
     await say(forked, "after-fork", "next");
     const done = await chatState(forked);
     expect([text(done, 0), text(done, 1)]).toEqual(["first", "next"]);
+  });
+
+  it("opens a side chat that knows its source but shows none of its history", async () => {
+    const { id, uri, chat } = await prompted();
+    await session(uri);
+    const turnId = (await chatState(chat)).turns.at(-1)!.id;
+    const side = `ahp-chat:/${randomUUID()}`;
+    const selection = { text: "first" };
+    await ahp.session.client.request("createChat", { channel: uri, chat: side, source: { kind: "sideChat", chat, turnId, selection } } as never);
+    const row = await until("side chat listed", async () => {
+      const found = (await items()).find((item) => item.resource === uri) as { chats?: Array<{ resource: string; origin?: unknown }> } | undefined;
+      return found?.chats?.some((c) => c.resource === side) ? found : undefined;
+    });
+    const expected = { kind: "sideChat", chat, turnId, selection };
+    expect(row.chats?.find((c) => c.resource === side)?.origin).toEqual(expected);
+    const members = (await daemon.admin.listSessions({ includeNonInteractive: true })).sessions;
+    expect(members.find((s) => s.forkedFromSessionId === id)).toBeDefined();
+    const opened = await chatState(side);
+    expect(opened.origin).toEqual(expected);
+    expect(opened.turns).toHaveLength(0);
+    await say(side, "aside", "what was that?");
+    const done = await chatState(side);
+    expect(done.turns.map((turn) => turn.message.text)).toEqual(["what was that?"]);
+    expect((await chatState(chat)).turns.map((turn) => turn.message.text)).toEqual(["first"]);
   });
 
   it("starts the first turn of a chat created with an initial message", async () => {
@@ -202,7 +226,7 @@ describe("several chats in one session against a scratch daemon", () => {
     await expect(ahp.session.client.request("createChat", { channel: uri, chat: dup } as never)).rejects.toMatchObject({ code: -32003 });
     await expect(ahp.session.client.request("createChat", { channel: "ahp-session:/nope", chat: `ahp-chat:/${randomUUID()}` } as never)).rejects.toMatchObject({ code: -32001 });
     await expect(
-      ahp.session.client.request("createChat", { channel: uri, chat: `ahp-chat:/${randomUUID()}`, source: { kind: "sideChat", chat, turnId: "x" } } as never),
+      ahp.session.client.request("createChat", { channel: uri, chat: `ahp-chat:/${randomUUID()}`, source: { kind: "branch", chat, turnId: "x" } } as never),
     ).rejects.toMatchObject({ code: -32602 });
     await expect(
       ahp.session.client.request("createChat", { channel: uri, chat: `ahp-chat:/${randomUUID()}`, source: { kind: "fork", chat: "ahp-chat:/elsewhere", turnId: "x" } } as never),

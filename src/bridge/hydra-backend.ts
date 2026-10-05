@@ -12,7 +12,7 @@ import type { FileService } from "../files/service.js";
 import { HydraHttpError, type HydraRest, type HydraSessionEntry } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
-import { AHP_CHAT_KEY, AHP_URI_KEY, type Catalog } from "./catalog.js";
+import { AHP_CHAT_KEY, AHP_URI_KEY, type Catalog, type SideOrigin } from "./catalog.js";
 import { chatKey, chatUri, cwdToUri, isChatUri, isSessionUri, sessionKey, uriToCwd } from "./ids.js";
 import { emptyChat } from "./replay.js";
 import { SessionBridge } from "./session-bridge.js";
@@ -409,11 +409,12 @@ export class HydraBackend implements Backend {
     if (this.catalog.chatInUse(chat) || this.core.store.has(chat)) {
       throw new RpcError(SESSION_EXISTS, "Chat already exists");
     }
-    const source = params.source as { kind?: unknown; chat?: unknown; turnId?: unknown } | undefined;
+    const source = params.source as { kind?: unknown; chat?: unknown; turnId?: unknown; selection?: unknown } | undefined;
     let forkFrom: { hydraId: string; at: string | undefined } | undefined;
+    let side: SideOrigin | undefined;
     if (source !== undefined) {
-      if (source.kind !== "fork") {
-        throw new RpcError(ErrorCodes.InvalidParams, "only fork sources are supported");
+      if (source.kind !== "fork" && source.kind !== "sideChat") {
+        throw new RpcError(ErrorCodes.InvalidParams, "only fork and sideChat sources are supported");
       }
       const sourceId = typeof source.chat === "string" ? this.catalog.resolveChat(source.chat) : undefined;
       if (!sourceId || this.catalog.groupOf(sourceId) !== session) {
@@ -421,10 +422,21 @@ export class HydraBackend implements Backend {
       }
       const turnId = typeof source.turnId === "string" ? source.turnId : undefined;
       forkFrom = { hydraId: sourceId, at: turnId === undefined ? undefined : (this.bridgeFor(source.chat as string)?.messageIdFor(turnId) ?? turnId) };
+      if (source.kind === "sideChat") {
+        const selection = source.selection as { text?: unknown; responsePartId?: unknown } | undefined;
+        if (selection !== undefined && (typeof selection.text !== "string" || selection.text === "")) {
+          throw new RpcError(ErrorCodes.InvalidParams, "selection.text must be non-empty");
+        }
+        side = {
+          chat: source.chat as string,
+          turnId: turnId ?? "",
+          ...(selection ? { selection: { text: selection.text as string, ...(typeof selection.responsePartId === "string" ? { responsePartId: selection.responsePartId } : {}) } } : {}),
+        };
+      }
     }
     const initial = params.initialMessage;
     this.catalog.beginChatCreation(chat, session);
-    const finishing = this.finishChat(session, chat, lead, forkFrom);
+    const finishing = this.finishChat(session, chat, lead, forkFrom, side);
     this.creating.set(chat, finishing);
     try {
       await finishing;
@@ -442,11 +454,15 @@ export class HydraBackend implements Backend {
     chat: string,
     lead: HydraSessionEntry,
     forkFrom: { hydraId: string; at: string | undefined } | undefined,
+    side: SideOrigin | undefined,
   ): Promise<void> {
     let hydraId: string | undefined;
     try {
+      const forkAt = forkFrom?.at ? { forkAt: forkFrom.at } : {};
       const created = forkFrom
-        ? await this.rest.forkSession(forkFrom.hydraId, { mode: "verbatim", ...(forkFrom.at ? { forkAt: forkFrom.at } : {}) })
+        ? side
+          ? await this.rest.sideSession(forkFrom.hydraId, { ...forkAt, ...(side.selection ? { selection: side.selection } : {}) })
+          : await this.rest.forkSession(forkFrom.hydraId, { mode: "verbatim", ...forkAt })
         : await this.rest.createSession({
             ...(lead.agentId ? { agentId: lead.agentId } : {}),
             ...(lead.cwd ? { cwd: lead.cwd } : {}),
@@ -454,9 +470,9 @@ export class HydraBackend implements Backend {
       hydraId = created.sessionId;
       await this.extState.set(hydraId, AHP_URI_KEY, session);
       const at = Date.now();
-      await this.extState.set(hydraId, AHP_CHAT_KEY, { chat, at });
+      await this.extState.set(hydraId, AHP_CHAT_KEY, { chat, at, ...(side ? { side } : {}) });
       const entry = await this.rest.getSession(hydraId);
-      this.catalog.claimChat(hydraId, session, chat, at, entry);
+      this.catalog.claimChat(hydraId, session, chat, at, entry, side);
     } catch (err) {
       log.warn(`createChat ${chat} failed`, message(err));
       if (hydraId) {

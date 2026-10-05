@@ -52,7 +52,7 @@ export class Catalog {
   private readonly entries = new Map<string, HydraSessionEntry>();
   private readonly stamps = new Map<string, string>();
   // The chat URI a Hydra session was added under and when; the session that started the AHP session has none and is the default chat.
-  private readonly chatStamps = new Map<string, { chat: string; at: number }>();
+  private readonly chatStamps = new Map<string, { chat: string; at: number; side?: SideOrigin }>();
   // The sessions and chats clients can address, rebuilt by every reconcile: a session URI maps to its member Hydra ids, oldest (the default chat) first.
   private readonly groups = new Map<string, string[]>();
   private readonly chatToId = new Map<string, string>();
@@ -124,6 +124,10 @@ export class Catalog {
 
   chatOf(hydraId: string): string {
     return this.chatStamps.get(hydraId)?.chat ?? chatUri(sessionKey(this.groupOf(hydraId)));
+  }
+
+  sideOf(hydraId: string): SideOrigin | undefined {
+    return this.chatStamps.get(hydraId)?.side;
   }
 
   membersOf(sessionUri: string): string[] {
@@ -306,9 +310,10 @@ export class Catalog {
           const value = await this.extState.get<string>(id, AHP_URI_KEY);
           if (typeof value === "string" && !this.stamps.has(id)) {
             this.stamps.set(id, value);
-            const chat = await this.extState.get<{ chat?: unknown; at?: unknown }>(id, AHP_CHAT_KEY);
+            const chat = await this.extState.get<{ chat?: unknown; at?: unknown; side?: unknown }>(id, AHP_CHAT_KEY);
             if (chat && typeof chat.chat === "string") {
-              this.chatStamps.set(id, { chat: chat.chat, at: typeof chat.at === "number" ? chat.at : 0 });
+              const side = sideOrigin(chat.side);
+              this.chatStamps.set(id, { chat: chat.chat, at: typeof chat.at === "number" ? chat.at : 0, ...(side ? { side } : {}) });
             }
           }
           this.lookedUp.add(id);
@@ -369,6 +374,7 @@ export class Catalog {
         entry: this.entries.get(id) as HydraSessionEntry,
         chat: this.chatOf(id),
         flags: this.flagsFor(id),
+        ...(this.sideOf(id) ? { origin: sideChatOrigin(this.sideOf(id) as SideOrigin) } : {}),
       }));
       next.set(uri, groupToSummary(members, uri));
     }
@@ -519,9 +525,9 @@ export class Catalog {
   }
 
   // Adds a Hydra session to an existing AHP session as one more chat.
-  claimChat(hydraId: string, sessionUri: string, chat: string, at: number, entry: HydraSessionEntry): void {
+  claimChat(hydraId: string, sessionUri: string, chat: string, at: number, entry: HydraSessionEntry, side?: SideOrigin): void {
     this.stamps.set(hydraId, sessionUri);
-    this.chatStamps.set(hydraId, { chat, at });
+    this.chatStamps.set(hydraId, { chat, at, ...(side ? { side } : {}) });
     this.lookedUp.add(hydraId);
     this.entries.set(hydraId, entry);
     this.pendingChats.delete(chat);
@@ -534,13 +540,31 @@ export class Catalog {
   }
 }
 
+export interface SideOrigin {
+  chat: string;
+  turnId: string;
+  selection?: { text: string; responsePartId?: string };
+}
+
+function sideOrigin(value: unknown): SideOrigin | undefined {
+  const raw = value as Partial<SideOrigin> | null | undefined;
+  if (!raw || typeof raw.chat !== "string" || typeof raw.turnId !== "string") {
+    return undefined;
+  }
+  return { chat: raw.chat, turnId: raw.turnId, ...(raw.selection ? { selection: raw.selection } : {}) };
+}
+
+export function sideChatOrigin(side: SideOrigin): Record<string, unknown> {
+  return { kind: "sideChat", chat: side.chat, turnId: side.turnId, ...(side.selection ? { selection: side.selection } : {}) };
+}
+
 function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[]): AgentInfo {
   return {
     provider: agent.id,
     displayName: agent.name || agent.id,
     description: agent.description ?? "",
     models: models.map((model) => ({ id: model.id, provider: agent.id, name: model.name })),
-    capabilities: { multipleChats: { fork: true } },
+    capabilities: { multipleChats: { fork: true, sideChat: true } },
   };
 }
 

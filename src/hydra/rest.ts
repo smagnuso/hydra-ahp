@@ -132,6 +132,10 @@ export class HydraRest {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(id)}/fork`, body);
   }
 
+  sideSession(id: string, body: { forkAt?: string; selection?: { text: string; responsePartId?: string } } = {}): Promise<{ sessionId: string }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(id)}/side`, body);
+  }
+
   deleteSession(id: string): Promise<void> {
     return this.request("DELETE", `/v1/sessions/${encodeURIComponent(id)}`);
   }

@@ -5,7 +5,7 @@ import type { ActionDecision } from "../protocol/backend.js";
 import type { ProtocolCore } from "../protocol/core.js";
 import { ErrorCodes, RpcError } from "../rpc/peer.js";
 import { logger } from "../util/log.js";
-import type { Catalog } from "./catalog.js";
+import { sideChatOrigin, type Catalog } from "./catalog.js";
 import { ChatMapper, type Frame } from "./mapping.js";
 import { UnsupportedContent, chooseOption, confirmationOptions, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
@@ -309,6 +309,8 @@ export class SessionBridge implements SessionListener {
 
     this.deps.catalog.noteModels(this.entry()?.agentId, meta.availableModels);
 
+    const side = this.deps.catalog.sideOf(hydraId);
+
     // Everything from here to the end of the method is synchronous, so no live frame can slip between the history and the join.
     const held = core.store.state(chatUri) as ChatState | undefined;
     const subscribed = core.hasSubscribers(chatUri) && held !== undefined;
@@ -342,7 +344,8 @@ export class SessionBridge implements SessionListener {
 
     const summary = this.deps.catalog.summaryFor(this.deps.sessionUri);
     const chatTitle = summary?.chats?.find((entry) => entry.resource === chatUri)?.title;
-    const base = held ?? emptyChat(chatUri, own?.title || chatTitle || "", own?.updatedAt ?? summary?.modifiedAt ?? new Date(0).toISOString(), withFlagBits(STATUS_IDLE, this.deps.catalog.flagsFor(this.deps.hydraId)));
+    const fresh = emptyChat(chatUri, own?.title || chatTitle || "", own?.updatedAt ?? summary?.modifiedAt ?? new Date(0).toISOString(), withFlagBits(STATUS_IDLE, this.deps.catalog.flagsFor(this.deps.hydraId)));
+    const base = held ?? (side ? ({ ...fresh, origin: sideChatOrigin(side) } as ChatState) : fresh);
     const plan = this.reconcilePlan(base, produced, cursor);
     // Replaying turns clears the read bit in the official reducers; the stored mark survives a replay.
     if (this.deps.catalog.flagsFor(this.deps.hydraId).isRead) {
