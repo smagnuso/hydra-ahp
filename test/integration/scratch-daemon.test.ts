@@ -49,9 +49,11 @@ describe("one scratch daemon", () => {
     );
     expect(await driver.prompt(id, "ping")).toBe("pong");
     await added;
-    const summary = (await list(ahp)).items.find((s) => s.resource === sessionOf(id));
-    expect(summary?.provider).toBe("fake");
-    expect(summary?.status).toBe(1);
+    // The status comes from the catalog's last poll, which can predate the end of the prompt by a poll interval.
+    const summary = await until("listed as idle", async () =>
+      (await list(ahp)).items.find((s) => s.resource === sessionOf(id) && s.status === 1),
+    );
+    expect(summary.provider).toBe("fake");
   });
 
   it("does not list sessions that were never prompted, even though the poll sees them", async () => {
