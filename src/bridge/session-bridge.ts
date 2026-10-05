@@ -149,6 +149,8 @@ export class SessionBridge implements SessionListener {
   private readonly unresolved = new Map<string, Parked>();
   private steer: HeldSteer | undefined;
   private writes: Promise<unknown> = Promise.resolve();
+  // Work an accepted write still owes Hydra; later writes wait for it.
+  private followUp: Promise<void> | undefined;
   commands: unknown;
 
   constructor(private readonly deps: BridgeDeps) {}
@@ -561,7 +563,12 @@ export class SessionBridge implements SessionListener {
   // Client actions on this session's channels, one at a time so writes reach Hydra in the order they were accepted.
   handleAction(channel: string, next: StateAction): Promise<ActionDecision> {
     const work = this.writes.then(() => this.decide(channel, next));
-    this.writes = work.catch(() => undefined);
+    const after = (): Promise<void> | undefined => {
+      const pending = this.followUp;
+      this.followUp = undefined;
+      return pending;
+    };
+    this.writes = work.then(after, after).catch(() => undefined);
     return work;
   }
 
@@ -691,6 +698,9 @@ export class SessionBridge implements SessionListener {
     if (!this.isLive) {
       return refuse("the session is not available");
     }
+    if (this.chatState()?.activeTurn?.id !== turnId || this.mapper.activeTurnId !== turnId) {
+      return refuse("that turn is not running");
+    }
     const answered: string[] = [];
     for (const [toolCallId, parked] of this.parked) {
       if (parked.turnId === turnId) {
@@ -699,12 +709,14 @@ export class SessionBridge implements SessionListener {
         answered.push(toolCallId);
       }
     }
-    const trailing = this.mapper.endLocal(turnId, Date.now());
-    if (answered.length > 0) {
-      await this.awaitAgent(answered);
-    }
-    this.deps.sessions.cancel(this.deps.hydraId);
-    this.publish(trailing);
+    this.publish(this.mapper.endLocal(turnId, Date.now()));
+    // Accepted now so the client's turnCancelled lands before any turn that starts during the wait.
+    this.followUp = (answered.length > 0 ? this.awaitAgent(answered) : Promise.resolve()).then(() => {
+      // A turn that started during the wait (a queued entry, say) is not the one the client cancelled.
+      if (!this.mapper.activeTurnId) {
+        this.deps.sessions.cancel(this.deps.hydraId);
+      }
+    });
     return ACCEPT;
   }
 
@@ -883,9 +895,12 @@ export class SessionBridge implements SessionListener {
       return;
     }
     this.dropSend(entry);
-    if (this.chatState()?.steeringMessage?.id === steer.id) {
-      this.publish([{ type: "chat/pendingMessageRemoved", kind: "steering", id: steer.id }]);
-    }
+    // The reply can beat the client's own pendingMessageSet into the chat, so look for the chip once that has landed.
+    setImmediate(() => {
+      if (this.chatState()?.steeringMessage?.id === steer.id) {
+        this.publish([{ type: "chat/pendingMessageRemoved", kind: "steering", id: steer.id }]);
+      }
+    });
   }
 
   private dropSend(entry: OwnEntry): void {

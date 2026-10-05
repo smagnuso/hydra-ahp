@@ -8,7 +8,7 @@ import type { Json } from "../../src/bridge/turns.js";
 import { FileService } from "../../src/files/service.js";
 import type { ExtensionState } from "../../src/hydra/ext-state.js";
 import type { HistoryPage, HydraRest, HydraSessionEntry } from "../../src/hydra/rest.js";
-import type { AttachOptions, AttachResult, HydraSessions, SessionListener } from "../../src/hydra/sessions.js";
+import type { AttachOptions, AttachResult, HydraSessions, SessionListener, SteeringResult } from "../../src/hydra/sessions.js";
 import type { SettleHandler } from "../../src/rpc/peer.js";
 import { ProtocolCore } from "../../src/protocol/core.js";
 import { AhpListener } from "../../src/server/listener.js";
@@ -51,6 +51,7 @@ export class FakeHydra {
   readonly writes: WriteCall[] = [];
   readonly prompts: PromptCall[] = [];
   modelFailure: Error | undefined;
+  steering: SteeringResult = { outcome: "injected" };
 
   sessions = {
     listen: (_id: string, listener: SessionListener) => {
@@ -103,6 +104,10 @@ export class FakeHydra {
     },
     delete: async (id: string): Promise<void> => {
       this.writes.push({ method: "session/delete", id });
+    },
+    steer: async (id: string, prompt: unknown[]): Promise<SteeringResult> => {
+      this.writes.push({ method: "_session/steering", id, params: prompt });
+      return this.steering;
     },
   } as unknown as HydraSessions;
 

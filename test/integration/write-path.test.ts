@@ -142,6 +142,7 @@ describe("write path against a scratch daemon", () => {
     const chat = await finished(view, "ahp-cancel");
     expect(chat.turns.at(-1)).toMatchObject({ id: "ahp-cancel", state: "cancelled" });
     expect(pendingCalls(view)).toHaveLength(0);
+    await until("Hydra idle", async () => !(await daemon.admin.getSession(view.id)).busy);
 
     driver.permissionAnswer = "allow";
     const log = await driver.agentLog(view.id);

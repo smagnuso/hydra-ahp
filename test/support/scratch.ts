@@ -64,6 +64,8 @@ export interface ScratchOptions {
   probe?: boolean;
   password?: string;
   ahpEnv?: Record<string, string>;
+  // Extra keys for the daemon block, e.g. a short idle timeout or a fast session GC.
+  daemon?: Record<string, unknown>;
 }
 
 // A throwaway Hydra daemon with a fake ACP agent, its own HYDRA_ACP_HOME and port, and this extension registered as "ahp".
@@ -102,7 +104,7 @@ export class ScratchDaemon {
     writeFileSync(
       join(home, "config.json"),
       JSON.stringify({
-        daemon: { port },
+        daemon: { port, ...options.daemon },
         registry: { pinned: true },
         defaultAgent: "fake",
         agents: {
