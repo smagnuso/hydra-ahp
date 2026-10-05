@@ -151,6 +151,8 @@ export class SessionBridge implements SessionListener {
   private meta: Json = {};
   private model: string | undefined;
   private readonly sends: OwnEntry[] = [];
+  // A detach asked for while our own prompts were in flight: Hydra would refuse them once we detached.
+  private detachWhenSettled = false;
   private readonly own = new Map<string, OwnEntry>();
   private readonly queuedEntries = new Map<string, OwnEntry>();
   private readonly parked = new Map<string, Parked>();
@@ -744,6 +746,11 @@ export class SessionBridge implements SessionListener {
     if (!this.attached || this.deps.core.hasSubscribers(this.deps.chatUri)) {
       return;
     }
+    // A prompt sent just before the client left must still run, and Hydra only runs prompts from attached clients.
+    if (this.sends.length > 0) {
+      this.detachWhenSettled = true;
+      return;
+    }
     await this.release();
   }
 
@@ -1287,6 +1294,10 @@ export class SessionBridge implements SessionListener {
   // The session/prompt answer is the only end this client hears of its own turn; Hydra leaves it out of turn_complete.
   private settled(entry: OwnEntry, result: unknown, error: Error | undefined, sink: (actions: Json[]) => void): void {
     this.dropSend(entry);
+    if (this.detachWhenSettled && this.sends.length === 0) {
+      this.detachWhenSettled = false;
+      void this.detach().catch((err) => log.debug(`detach ${this.deps.hydraId} after its prompts failed`, message(err)));
+    }
     if (entry.messageId) {
       this.own.delete(entry.messageId);
     }

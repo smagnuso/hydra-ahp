@@ -154,6 +154,20 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
     expect(harness.hydra.writes.map((write) => write.method)).not.toContain("session/cancel");
   });
 
+  it("stays attached until a prompt sent just before the client left has run", async () => {
+    harness = await startBridgeHarness();
+    const { session } = await open();
+    await dispatch(session, { type: "chat/turnStarted", turnId: "t-away", startedAt: new Date().toISOString(), message: { text: "go", origin: { kind: "user" } } });
+    await session.client.unsubscribe(CHAT);
+    await session.client.unsubscribe(SESSION);
+    await sleep(100);
+    expect(harness.hydra.prompts).toHaveLength(1);
+    expect(harness.hydra.detaches).toEqual([]);
+    harness.hydra.prompts[0]!.end("end_turn");
+    await sleep(100);
+    expect(harness.hydra.detaches).toEqual(["h1"]);
+  });
+
   it("refuses to cancel a turn that is not running and sends Hydra no cancel", async () => {
     harness = await startBridgeHarness();
     const { session } = await open();
