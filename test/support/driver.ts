@@ -15,20 +15,41 @@ export interface PermissionRequest {
   options: Array<{ optionId: string; kind: string }>;
 }
 
+export interface HeldPermission {
+  params: PermissionRequest;
+  answer(optionId: string): void;
+}
+
 // A plain Hydra ACP client for scripting sessions on a scratch daemon.
 export class Driver {
   readonly updates: SessionUpdate[] = [];
   readonly permissions: PermissionRequest[] = [];
-  permissionAnswer: string | "abstain" = "allow";
+  // Requests left open under "hold", for the test to answer whenever it likes.
+  readonly held: HeldPermission[] = [];
+  readonly notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+  permissionAnswer: string | "abstain" | "hold" = "allow";
 
   constructor(readonly client: HydraClient) {
     client.peer.onNotification("session/update", (params) => {
       this.updates.push(params as SessionUpdate);
     });
+    for (const method of ["added", "updated", "removed", "held", "released"].map((kind) => `hydra-acp/prompt_queue/${kind}`)) {
+      client.peer.onNotification(method, (params) => {
+        this.notifications.push({ method, params: params as Record<string, unknown> });
+      });
+    }
     const answer = (params: unknown): unknown => {
       this.permissions.push(params as PermissionRequest);
       if (this.permissionAnswer === "abstain") {
         throw new RpcError(-32601, "abstain");
+      }
+      if (this.permissionAnswer === "hold") {
+        return new Promise((resolve) => {
+          this.held.push({
+            params: params as PermissionRequest,
+            answer: (optionId) => resolve({ outcome: { outcome: "selected", optionId } }),
+          });
+        });
       }
       return { outcome: { outcome: "selected", optionId: this.permissionAnswer } };
     };
@@ -41,8 +62,12 @@ export class Driver {
     return new Driver(await daemon.client());
   }
 
-  async newSession(cwd = "/tmp"): Promise<string> {
-    const result = await this.client.request<{ sessionId: string }>("session/new", { cwd, mcpServers: [] });
+  async newSession(cwd = "/tmp", agentId?: string): Promise<string> {
+    const result = await this.client.request<{ sessionId: string }>("session/new", {
+      cwd,
+      mcpServers: [],
+      ...(agentId ? { _meta: { "hydra-acp": { agentId } } } : {}),
+    });
     return result.sessionId;
   }
 
@@ -64,6 +89,16 @@ export class Driver {
     const from = this.updates.length;
     await this.client.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
     return this.textSince(sessionId, from);
+  }
+
+  // Everything this driver has seen of the session's kinds, in arrival order.
+  kinds(sessionId: string): string[] {
+    return this.updates.filter((u) => u.sessionId === sessionId).map((u) => u.update.sessionUpdate);
+  }
+
+  // The fake agent's own record of what reached it (prompts, steers, cancels, permission answers).
+  async agentLog(sessionId: string): Promise<string[]> {
+    return JSON.parse(await this.prompt(sessionId, "script:log")) as string[];
   }
 
   textSince(sessionId: string, from: number): string {

@@ -105,7 +105,10 @@ export class ScratchDaemon {
         daemon: { port },
         registry: { pinned: true },
         defaultAgent: "fake",
-        agents: { fake: { command: "node", args: [FAKE_AGENT] } },
+        agents: {
+          fake: { command: "node", args: [FAKE_AGENT] },
+          "fake-steering": { command: "node", args: [FAKE_AGENT, "--steering"] },
+        },
         extensions,
       }),
     );
