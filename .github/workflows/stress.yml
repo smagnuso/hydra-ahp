@@ -59,6 +59,7 @@ jobs:
             fi
           done
           echo "$failed of ${{ inputs.rounds || 8 }} rounds failed"
+          test "$failed" -eq 0
       - if: always()
         uses: actions/upload-artifact@v4
         with:
