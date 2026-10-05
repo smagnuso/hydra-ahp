@@ -392,6 +392,8 @@ describe("idle close and session GC against a scratch daemon", () => {
     expect(await listed(channel)).toBe(false);
     await expect(ahp.session.client.subscribe(view.chatUri)).rejects.toMatchObject({ code: -32001 });
     expect(await listed(sessionOf(kept))).toBe(true);
-    expect((await daemon.admin.getSession(kept)).status).toBe("cold");
+    // Its own idle close runs on its own timer, which can trail the unprompted session's collection.
+    await until(`${kept} cold`, async () => (await daemon.admin.getSession(kept)).status === "cold", 30000);
+    expect(await listed(sessionOf(kept))).toBe(true);
   });
 });
