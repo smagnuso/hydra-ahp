@@ -43,6 +43,26 @@ function settle(session: Session, oracle: ReducerOracle): void {
   }
 }
 
+function mirrors(harness: BridgeHarness, oracle: ReducerOracle): boolean {
+  return oracle
+    .channels()
+    .every((channel) => JSON.stringify(oracle.state(channel)) === JSON.stringify(harness.core.store.snapshot(channel)?.state));
+}
+
+// One publish can touch several channels: closing a turn also mirrors the chat's status into the session's catalog
+// entry. Those are separate envelopes, so waiting on the chat's alone can sample the client mid-delivery. Settles
+// until the client's mirror matches every channel, then gives up and lets the caller's assertions report the gap.
+async function settleUntilMirrored(session: Session, oracle: ReducerOracle, harness: BridgeHarness): Promise<void> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    settle(session, oracle);
+    if (mirrors(harness, oracle) || Date.now() > deadline) {
+      return;
+    }
+    await sleep(5);
+  }
+}
+
 describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
   let harness: BridgeHarness;
 
@@ -127,7 +147,7 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     send({ sessionUpdate: "tool_call_update", toolCallId: "x", status: "completed", content: [{ type: "content", content: { type: "text", text: "ok" } }] });
     send({ sessionUpdate: "turn_complete", stopReason: "end_turn" });
     await session.waitFor((e) => e.action.type === "chat/turnComplete" && (e.action as { turnId?: string }).turnId === "live1");
-    settle(session, oracle);
+    await settleUntilMirrored(session, oracle, harness);
     const end = harness.core.store.state(CHAT) as ChatState;
     expect(end.turns).toHaveLength(5);
     expect(end.turns[4]!.state).toBe("complete");
