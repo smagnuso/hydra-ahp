@@ -174,6 +174,19 @@ const UNSOLICITED_LABEL = "The agent continued on its own";
 const PLAN_MARKS: Record<string, string> = { completed: "✓", in_progress: "▶", pending: "○" };
 
 // The markdown form bolds the step in progress, the only heavy line in the list, so it stands out in the row.
+// Agents that describe a call (Claude's shell and task tools) put it in the input; VS Code shows it beside the command.
+function intentionOf(call: Call): Json {
+  if (call.input === undefined) {
+    return {};
+  }
+  try {
+    const description = text(bag(JSON.parse(call.input)).description);
+    return description ? { intention: description } : {};
+  } catch {
+    return {};
+  }
+}
+
 // VS Code renders a terminal call from its input's command, so one whose command is not a single string stays a plain tool.
 function isShellCommand(call: Call): boolean {
   if (call.kind !== "execute") {
@@ -404,6 +417,7 @@ export class ChatMapper {
       invocationMessage: call.displayName,
       ...(title ? { confirmationTitle: title } : {}),
       ...(call.input === undefined ? {} : { toolInput: call.input }),
+      ...intentionOf(call),
       ...(edits.length > 0 ? { edits: { items: edits } } : {}),
       ...(options.length > 0 ? { options } : {}),
       ...this.callMeta(call),
@@ -637,6 +651,7 @@ export class ChatMapper {
       invocationMessage: call.message ?? call.displayName,
       confirmed: "not-needed",
       ...(call.input === undefined ? {} : { toolInput: call.input }),
+      ...intentionOf(call),
       ...this.callMeta(call),
     };
   }

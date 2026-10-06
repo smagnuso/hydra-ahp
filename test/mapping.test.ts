@@ -140,6 +140,20 @@ describe("chat mapping", () => {
     expect(meta("rd").toolKind).toBeUndefined();
   });
 
+  it("passes a call's described purpose through as its intention", () => {
+    const folded = foldRecorded([
+      prompt(),
+      call({ toolCallId: "sh", title: "git log", kind: "execute", status: "in_progress", rawInput: { command: "git log -1", description: "Show the last commit" } }),
+      call({ toolCallId: "rd", title: "Read", kind: "read", status: "in_progress", rawInput: { path: "a" } }),
+    ]);
+    const intention = (id: string) =>
+      (folded.state.activeTurn!.responseParts.find((part) => (part as { toolCall?: { toolCallId: string } }).toolCall?.toolCallId === id) as {
+        toolCall: { intention?: string };
+      }).toolCall.intention;
+    expect(intention("sh")).toBe("Show the last commit");
+    expect(intention("rd")).toBeUndefined();
+  });
+
   it("shows a wake-up Hydra could not attribute as a notification, not an empty request", () => {
     const turn = foldRecorded([frame({ sessionUpdate: "_hydra_turn_started", messageId: "w1", _meta: { "hydra-acp": { unsolicited: true } } }), say("hi")]).state.activeTurn!;
     expect(turn.message).toMatchObject({ origin: { kind: "systemNotification" }, text: "The agent continued on its own" });
