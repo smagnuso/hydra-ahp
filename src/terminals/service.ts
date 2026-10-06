@@ -1,4 +1,4 @@
-import { accessSync, chmodSync, constants, existsSync } from "node:fs";
+import { accessSync, chmodSync, constants, existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -39,6 +39,24 @@ function defaultShell(): string {
     return process.env.ComSpec ?? "cmd.exe";
   }
   return process.env.SHELL ?? "/bin/sh";
+}
+
+// A session imported from another machine keeps that machine's cwd, and a client opens its terminal there. The path
+// parses as a URI but does not exist here, and node-pty fails the spawn, so an unusable one falls back to the home
+// directory rather than failing outright: a shell in the wrong place beats no shell.
+function usableCwd(cwd: string | undefined): string {
+  if (cwd === undefined) {
+    return homedir();
+  }
+  try {
+    if (statSync(cwd).isDirectory()) {
+      return cwd;
+    }
+    log.warn(`${cwd} is not a directory; opening the terminal in the home directory instead`);
+  } catch {
+    log.warn(`${cwd} does not exist here; opening the terminal in the home directory instead`);
+  }
+  return homedir();
 }
 
 // node-pty 1.1.0 ships its macOS spawn-helper without the execute bit, so every spawn fails with "posix_spawnp failed".
@@ -84,7 +102,7 @@ export class TerminalService {
       makeSpawnHelperExecutable();
       this.spawn = (shell, args, options) => pty.spawn(shell, args, options);
     } catch (err) {
-      log.info("terminals are unavailable: node-pty did not load", err instanceof Error ? err.message : err);
+      log.warn("terminals are unavailable: node-pty did not load", err instanceof Error ? err.message : err);
     }
   }
 
@@ -93,7 +111,10 @@ export class TerminalService {
   }
 
   handle(method: string, params: unknown, client: ClientContext): null {
+    // Both causes have to stay -32601 on the wire, but they are unrelated and the client cannot tell them apart.
     if (!this.spawn || client.token.level !== "full") {
+      const why = this.spawn ? `the token is ${client.token.level}, not full` : "node-pty is not loaded";
+      log.info(`refusing ${method}: ${why}`);
       throw new RpcError(ErrorCodes.MethodNotFound, `method not found: ${method}`);
     }
     const body = (params ?? {}) as Record<string, unknown>;
@@ -183,7 +204,7 @@ export class TerminalService {
       throw new RpcError(ErrorCodes.InvalidParams, "terminal already exists");
     }
     const cwdUri = typeof body.cwd === "string" ? body.cwd : undefined;
-    const cwd = (cwdUri && uriToCwd(cwdUri)) || homedir();
+    const cwd = usableCwd(cwdUri && uriToCwd(cwdUri));
     const cols = positive(body.cols) ?? 80;
     const rows = positive(body.rows) ?? 24;
     const title = typeof body.name === "string" && body.name !== "" ? body.name : "Terminal";
