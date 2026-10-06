@@ -32,6 +32,8 @@ export interface CatalogOptions {
   pollMs?: number;
   warmPollMs?: number;
   agentsEveryPolls?: number;
+  // List sessions copied in from another machine; off by default, they are usually the bulk of the list.
+  showImported?: boolean;
   // Advertise each local session's uncommitted changes; the backend must serve them.
   changesets?: boolean;
 }
@@ -47,6 +49,13 @@ function remoteOwner(entry: HydraSessionEntry): string | undefined {
     return entry.importedFromMachine;
   }
   return isFederatedId(entry.sessionId) ? entry.sessionId.slice(0, entry.sessionId.indexOf(":")) : undefined;
+}
+
+// A session copied in from another machine: the history is here but the agent and the files are not. A federated or
+// remote session is a live view of a peer rather than a copy, and one resumed here has an upstream session of its
+// own, so neither counts as imported.
+function isImported(entry: HydraSessionEntry): boolean {
+  return entry.importedFromMachine !== undefined && !entry.upstreamSessionId && entry.remote === undefined;
 }
 
 const action = (value: Json) => value as never;
@@ -451,6 +460,9 @@ export class Catalog {
     if (this.stamps.has(hydraId)) {
       return true;
     }
+    if (!this.options.showImported && isImported(entry)) {
+      return false;
+    }
     return entry.interactive === true && !entry.parentSessionId;
   }
 
@@ -588,7 +600,8 @@ export class Catalog {
     const known = new Map(this.rawAgents.map((agent) => [agent.id, agent]));
     const referenced = new Set<string>();
     for (const entry of this.entries.values()) {
-      if (entry.agentId !== undefined && !advertised.has(entry.agentId)) {
+      // Only what a client can actually open: an agent whose sessions are all hidden is picker noise.
+      if (entry.agentId !== undefined && !advertised.has(entry.agentId) && this.isListed(entry.sessionId)) {
         referenced.add(entry.agentId);
       }
     }

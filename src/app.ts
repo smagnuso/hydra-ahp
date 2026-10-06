@@ -69,6 +69,7 @@ export async function startApp(config: Config, version: string): Promise<App> {
     configs: new ConfigStore(config.configsPath),
     ...(config.pollMs !== undefined ? { pollMs: config.pollMs } : {}),
     ...(config.warmPollMs !== undefined ? { warmPollMs: config.warmPollMs } : {}),
+    showImported: config.showImported,
     changesets: true,
   });
   const sessions = new HydraSessions(client, { name: "hydra-ahp", version });

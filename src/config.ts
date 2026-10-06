@@ -14,6 +14,7 @@ export interface Config {
   warmPollMs: number | undefined;
   permissionDelayMs: number;
   debug: boolean;
+  showImported: boolean;
   tokensPath: string;
   flagsPath: string;
   modelsPath: string;
@@ -31,6 +32,20 @@ function numberFrom(env: NodeJS.ProcessEnv, key: string): number | undefined {
     throw new Error(`${key} must be a non-negative number, got ${raw}`);
   }
   return value;
+}
+
+function booleanFrom(env: NodeJS.ProcessEnv, key: string, fallback: boolean): boolean {
+  const raw = env[key];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  if (["1", "true", "yes", "on"].includes(raw.toLowerCase())) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(raw.toLowerCase())) {
+    return false;
+  }
+  throw new Error(`${key} must be a boolean, got ${raw}`);
 }
 
 export function hydraHome(env: NodeJS.ProcessEnv): string {
@@ -85,6 +100,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warmPollMs: numberFrom(env, "HYDRA_AHP_WARM_POLL_MS"),
     permissionDelayMs: numberFrom(env, "HYDRA_AHP_PERMISSION_DELAY_MS") ?? DEFAULT_PERMISSION_DELAY_MS,
     debug: env.HYDRA_AHP_LOG_LEVEL === "debug",
+    // Sessions copied in from another machine are someone else's work and usually outnumber this machine's own.
+    showImported: booleanFrom(env, "HYDRA_AHP_SHOW_IMPORTED", false),
     tokensPath: tokensPath(env),
     flagsPath: flagsPath(env),
     modelsPath: modelsPath(env),
