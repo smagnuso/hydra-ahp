@@ -99,16 +99,25 @@ describe("edit and resend against a scratch daemon", () => {
     expect(await historyText(id)).toBe(before);
   });
 
-  it("follows a rewind another client made", async () => {
+  it("drops just the turns another client's rewind removed", async () => {
     const { id, chat } = await twoTurns();
+    const kept = (await chatState(chat)).turns[0]!.id;
     const pages = (await daemon.admin.historyPage(id, Number.MAX_SAFE_INTEGER, 50)).entries;
     const firstPrompt = pages
       .map((entry) => (entry.params as { update?: { sessionUpdate?: string; messageId?: string } }).update)
       .find((update) => update?.sessionUpdate === "prompt_received")?.messageId;
+    const before = ahp.session.events.length;
     await daemon.admin.rewindSession(id, firstPrompt!);
-    await until("chat follows the rewind", async () => {
-      const state = await chatState(chat);
-      return texts(state).join("|") === "first" ? true : undefined;
-    });
+    const cut = await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/truncated", 8000);
+    expect((cut.action as { turnId?: string }).turnId).toBe(kept);
+    expect(texts(await chatState(chat))).toEqual(["first"]);
+    const replayed = ahp.session.events.slice(before).filter((e) => e.channel === chat && e.action.type === "chat/turnStarted");
+    expect(replayed).toEqual([]);
+  });
+
+  it("empties the chat when another client runs /hydra clear", async () => {
+    const { id, chat } = await twoTurns();
+    await driver.prompt(id, "/hydra clear");
+    await until("chat cleared", async () => ((await chatState(chat)).turns.length === 0 ? true : undefined));
   });
 });

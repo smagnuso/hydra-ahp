@@ -1,7 +1,7 @@
 import type { ChatState, SessionState, StateAction, ToolCallState } from "@microsoft/agent-host-protocol";
 import { isFederatedId } from "./ids.js";
 import type { EditContentStore } from "./edit-content.js";
-import type { HydraSessionEntry, HydraRest } from "../hydra/rest.js";
+import { HydraHttpError, type HydraSessionEntry, type HydraRest } from "../hydra/rest.js";
 import type { HydraSessions, QueueEvent, SessionListener, SteeringResult } from "../hydra/sessions.js";
 import type { ActionDecision } from "../protocol/backend.js";
 import type { ProtocolCore } from "../protocol/core.js";
@@ -96,6 +96,19 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function rewindRefusal(err: unknown): string {
+  if (err instanceof HydraHttpError) {
+    const body = (err.body ?? {}) as { error?: unknown; message?: unknown };
+    if (err.status === 404 && typeof body.message === "string" && body.message.startsWith("Route ")) {
+      return "this Hydra daemon cannot rewind a chat; update hydra-acp";
+    }
+    if (typeof body.error === "string") {
+      return `Hydra could not rewind the chat: ${body.error}`;
+    }
+  }
+  return `Hydra could not rewind the chat: ${message(err)}`;
+}
+
 export interface BridgeDeps {
   hydraId: string;
   sessionUri: string;
@@ -163,6 +176,8 @@ export class SessionBridge implements SessionListener {
   private writes: Promise<unknown> = Promise.resolve();
   // Work an accepted write still owes Hydra; later writes wait for it.
   private followUp: Promise<void> | undefined;
+  // Rewinds this bridge asked for whose broadcast has not come back yet.
+  private ownTruncations = 0;
   // Set while the host itself starts a turn, which needs no subscribed client.
   private headless = false;
   commands: unknown;
@@ -536,6 +551,14 @@ export class SessionBridge implements SessionListener {
       this.applyConfig(options);
       return;
     }
+    if (kind === "_hydra_history_truncated") {
+      if (this.ownTruncations > 0) {
+        this.ownTruncations -= 1;
+      } else {
+        this.followTruncation(frame.update.keepThrough, sink);
+      }
+      return;
+    }
     if (kind === "_hydra_current_model_update") {
       this.noteModel(text(frame.update.currentModel));
       return;
@@ -868,9 +891,76 @@ export class SessionBridge implements SessionListener {
         return body.kind === "steering" ? this.setSteering(body) : this.setQueued(body);
       case "chat/pendingMessageRemoved":
         return body.kind === "steering" ? this.removeSteering(text(body.id) ?? "") : this.removeQueued(text(body.id) ?? "");
+      case "chat/truncated":
+        return this.truncate(text(body.turnId));
       default:
         return refuse("this host does not accept that action");
     }
+  }
+
+  // Edit-and-resend: Hydra rewinds the session in place, so the agent forgets the dropped turns and every other client follows.
+  private async truncate(turnId: string | undefined): Promise<ActionDecision> {
+    const state = this.chatState();
+    if (!state) {
+      return refuse("Chat not found");
+    }
+    const kept = turnId === undefined ? -1 : state.turns.findIndex((turn) => turn.id === turnId);
+    // A turn the chat does not hold makes the action a no-op, as the reducer treats it.
+    if (turnId !== undefined && kept < 0) {
+      return ACCEPT;
+    }
+    if (state.activeTurn || this.sends.length > 0 || (state.queuedMessages?.length ?? 0) > 0) {
+      return refuse("stop the running turn before editing an earlier message");
+    }
+    if (kept === state.turns.length - 1) {
+      return ACCEPT;
+    }
+    const { hydraId, rest } = this.deps;
+    if (isFederatedId(hydraId) || this.entry()?.remote !== undefined) {
+      return refuse("a chat on a federated remote cannot be rewound");
+    }
+    // Hydra tells every attached client, this bridge included; the client's own action already says the same.
+    const expectBroadcast = this.isLive;
+    if (expectBroadcast) {
+      this.ownTruncations += 1;
+    }
+    try {
+      await rest.rewindSession(hydraId, turnId === undefined ? null : this.messageIdFor(turnId));
+    } catch (err) {
+      if (expectBroadcast) {
+        this.ownTruncations -= 1;
+      }
+      return refuse(rewindRefusal(err));
+    }
+    return ACCEPT;
+  }
+
+  // Another client rewound or cleared the session. Clients drop just the turns that went when the kept turn is one this
+  // chat holds; anything else (the turn is an agent message's id, or outside the loaded window) rebuilds the chat.
+  private followTruncation(keepThrough: unknown, sink: (actions: Json[]) => void): void {
+    if (keepThrough === null) {
+      sink([{ type: "chat/truncated" }, { type: "chat/turnsLoaded", turns: [] }]);
+      return;
+    }
+    const messageId = text(keepThrough);
+    const turnId = messageId === undefined ? undefined : (this.mapper.aliases.get(messageId) ?? messageId);
+    if (turnId !== undefined && this.chatState()?.turns.some((turn) => turn.id === turnId)) {
+      sink([{ type: "chat/truncated", turnId }]);
+      return;
+    }
+    this.resync();
+  }
+
+  // Rebuilds the chat from Hydra's history, as a reattach does.
+  private resync(): void {
+    void this.serial(async () => {
+      if (!this.attached || this.disposed) {
+        return;
+      }
+      const live = this.mode === "live";
+      await this.release();
+      await this.doAttach(live);
+    }).catch((err) => log.warn(`resync ${this.deps.hydraId} after a rewind failed`, toRpc(err).message));
   }
 
   private chatState(): ChatState | undefined {

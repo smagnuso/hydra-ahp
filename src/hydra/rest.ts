@@ -142,6 +142,11 @@ export class HydraRest {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(id)}/side`, body);
   }
 
+  // Edit-and-resend in place: drops every turn after the one holding keepThrough (null: all of them), keeping the session id.
+  rewindSession(id: string, keepThrough: string | null): Promise<{ sessionId: string; removed: number }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(id)}/rewind`, { keepThrough });
+  }
+
   // Demotes a live session to cold: the agent exits, the record stays and the session resumes on demand.
   killSession(id: string): Promise<void> {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(id)}/kill`);
