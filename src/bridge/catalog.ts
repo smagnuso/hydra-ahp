@@ -545,6 +545,8 @@ export class Catalog {
   }
 
   private syncRoot(): void {
+    // A page of sessions can name an agent not seen before, and its sessions stay unreadable until it is advertised.
+    this.republishAgents();
     const active = [...this.entries.values()].filter((e) => e.status === "warm").length;
     const root = this.core.store.state(ROOT_URI) as RootState | undefined;
     if (root && root.activeSessions !== active) {
@@ -577,10 +579,32 @@ export class Catalog {
     }
   }
 
+  // VS Code resolves a session's content provider from its scheme, which is the agent id, and renders nothing for a
+  // provider the root channel never advertised. Sessions imported from another machine name agents that are not
+  // installed here, or not in the registry at all, so every agent any session refers to is advertised too.
   private buildAgents(): AgentInfo[] {
-    return this.rawAgents
-      .filter((agent) => agent.installed !== "no")
-      .map((agent) => toAgentInfo(agent, defaultFirst(this.options.models?.get(agent.id) ?? [], this.defaultModelOf(agent))));
+    const installed = this.rawAgents.filter((agent) => agent.installed !== "no");
+    const advertised = new Set(installed.map((agent) => agent.id));
+    const known = new Map(this.rawAgents.map((agent) => [agent.id, agent]));
+    const referenced = new Set<string>();
+    for (const entry of this.entries.values()) {
+      if (entry.agentId !== undefined && !advertised.has(entry.agentId)) {
+        referenced.add(entry.agentId);
+      }
+    }
+    // Installed agents keep Hydra's order, so the picker's default does not move; the rest trail it. A referenced
+    // agent Hydra knows is only uninstalled, which it fixes on demand; one it has never heard of is a local
+    // definition from the machine the session came from, and nothing here can start it.
+    const extra = [...referenced].sort();
+    return [
+      ...installed.map((agent) => this.agentInfo(agent, true)),
+      ...extra.map((id) => this.agentInfo(known.get(id) ?? { id, name: id }, known.has(id))),
+    ];
+  }
+
+  private agentInfo(agent: HydraAgent, available: boolean): AgentInfo {
+    const models = defaultFirst(this.options.models?.get(agent.id) ?? [], this.defaultModelOf(agent));
+    return toAgentInfo(agent, models, available);
   }
 
   // VS Code picks the first model for a new session, so the one Hydra would seed it with goes first.
@@ -742,11 +766,16 @@ function defaultFirst(models: readonly KnownModel[], model: string | undefined):
   return [known, ...models.filter((entry) => entry.id !== model)];
 }
 
-function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[]): AgentInfo {
+// AHP has no way to mark an agent unselectable, so one that cannot run here says so in its description; creating a
+// session on it reaches Hydra, which refuses with its own error.
+const UNAVAILABLE = "Not configured on this machine: existing sessions are readable, new ones will fail to start.";
+
+function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[], available = true): AgentInfo {
+  const description = agent.description ?? "";
   return {
     provider: agent.id,
     displayName: agent.name || agent.id,
-    description: agent.description ?? "",
+    description: available ? description : [description, UNAVAILABLE].filter(Boolean).join(" "),
     models: models.map((model) => ({ id: model.id, provider: agent.id, name: model.name })),
     capabilities: { multipleChats: { fork: true, sideChat: true } },
   };
