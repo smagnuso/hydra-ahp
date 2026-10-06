@@ -234,6 +234,13 @@ export class ProtocolCore {
     this.detachTimers.set(uri, timer);
   }
 
+  // For a channel opened only to take a dispatch: it closes as if its last subscriber had left.
+  releaseIfUnwatched(uri: string): void {
+    if (!this.hasSubscribers(uri) && !this.attaching.has(uri)) {
+      this.scheduleDetach(uri);
+    }
+  }
+
   // For a subscribe that finished attaching after its connection went away.
   detachIfIdle(uri: string): void {
     if (!this.hasSubscribers(uri) && !this.attaching.has(uri)) {

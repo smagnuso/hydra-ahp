@@ -71,6 +71,28 @@ describe("read and archive marks against a scratch daemon", () => {
     await fresh.close();
   });
 
+  it("keeps the read mark when the chat is reopened after its Hydra session detached", async () => {
+    const { id, view } = await opened();
+    await view.dispatch({ type: "session/isReadChanged", isRead: true }, view.sessionUri);
+    await until("row read", async () => (((await rowStatus(id)) ?? 0) & IS_READ) === IS_READ);
+    await view.close();
+    await new Promise((resolve) => setTimeout(resolve, 6_500));
+    const fresh = await ChatView.open(ahp, id);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(fresh.chat().status & IS_READ).toBe(IS_READ);
+    expect(fresh.session().status & IS_READ).toBe(IS_READ);
+    expect(((await rowStatus(id)) ?? 0) & IS_READ).toBe(IS_READ);
+    await fresh.close();
+  }, 30_000);
+
+  it("marks read from a session channel the client never subscribed to", async () => {
+    const id = await driver.newSession(WORK_DIR);
+    await driver.prompt(id, "ping");
+    await until("session listed", async () => (await rowStatus(id)) !== undefined);
+    ahp.session.client.dispatch(sessionOf(id), { type: "session/isReadChanged", isRead: true } as never);
+    await until("row read", async () => (((await rowStatus(id)) ?? 0) & IS_READ) === IS_READ, 5_000);
+  });
+
   it("clears the read mark when the session sees new activity", async () => {
     const { id, view } = await opened();
     await view.dispatch({ type: "session/isReadChanged", isRead: true }, view.sessionUri);

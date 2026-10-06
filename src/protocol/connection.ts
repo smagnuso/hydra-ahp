@@ -225,7 +225,27 @@ export function bindConnection(core: ProtocolCore, peer: JsonRpcPeer, token: Tok
     if (typeof channel !== "string" || typeof clientSeq !== "number" || typeof action !== "object" || !action) {
       return;
     }
-    const origin: ActionOrigin = { clientId: connection.clientId, clientSeq };
+    // A client may act on a channel it never subscribed to (answering a session's inputNeeded entry,
+    // marking a listed session read), so open it for the action and let it close again.
+    if (core.store.has(channel)) {
+      await applyAction(channel, clientSeq, action);
+      return;
+    }
+    try {
+      await core.ensureAttached(channel);
+    } catch (err) {
+      log.debug(`dispatch to ${channel} dropped`, err);
+      return;
+    }
+    try {
+      await applyAction(channel, clientSeq, action);
+    } finally {
+      core.releaseIfUnwatched(channel);
+    }
+  }
+
+  async function applyAction(channel: string, clientSeq: number, action: object): Promise<void> {
+    const origin: ActionOrigin = { clientId: connection.clientId as string, clientSeq };
     const typed = withActiveTurn(core.store.state(channel), action as StateAction);
     const refuse = (reason: string): void => {
       core.sendRejection(connection, channel, typed, origin, reason);
