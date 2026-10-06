@@ -704,8 +704,12 @@ export class Catalog {
 
   // Paging is keyset based (newest first) so a concurrent change never repeats or skips a row.
   list(limit: number | undefined, cursor: string | undefined): { items: SessionSummary[]; nextCursor?: string } {
-    const size = Math.min(Math.max(Math.trunc(limit ?? DEFAULT_PAGE_SIZE) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     let all = this.summaries();
+    // VS Code asks once, with neither, and never follows a cursor: a first page would hide every older session from it.
+    if (limit === undefined && !cursor) {
+      return { items: all };
+    }
+    const size = Math.min(Math.max(Math.trunc(limit ?? DEFAULT_PAGE_SIZE) || DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     if (cursor) {
       const key = decodeCursor(cursor);
       all = all.filter((s) => s.modifiedAt < key.modifiedAt || (s.modifiedAt === key.modifiedAt && s.resource > key.resource));
