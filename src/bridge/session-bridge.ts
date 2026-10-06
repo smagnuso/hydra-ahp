@@ -123,6 +123,13 @@ export interface BridgeDeps {
 
 const action = (value: Json) => value as never;
 
+// The session _meta key VS Code's context-window meter reads (Copilot's own, the only one it reads).
+const CONTEXT_USAGE_KEY = "copilot.usageInfo";
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 function toRpc(err: unknown): RpcError {
   if (err instanceof RpcError) {
     return err;
@@ -413,6 +420,9 @@ export class SessionBridge implements SessionListener {
     this.mode = viewer ? "viewer" : "live";
     this.syncChatSummary();
     this.syncInputNeeded();
+    // Hydra keeps no usage in history, so the attach's last known usage seeds the meter until the next update.
+    const usage = bag(meta.currentUsage);
+    this.syncContextUsage(usage.used, usage.size);
   }
 
   // The queue snapshot without this client's own entries, which already stand as AHP chips or turns.
@@ -562,6 +572,9 @@ export class SessionBridge implements SessionListener {
     if (kind === "_hydra_current_model_update") {
       this.noteModel(text(frame.update.currentModel));
       return;
+    }
+    if (kind === "usage_update") {
+      this.syncContextUsage(frame.update.used, frame.update.size);
     }
     sink(this.mapper.map(frame));
     this.maybeSteer();
@@ -1538,6 +1551,20 @@ export class SessionBridge implements SessionListener {
   }
 
   // Mirrors the parked confirmations into the session's inputNeeded list.
+  // The session's context meter; only the default chat speaks for the session.
+  private syncContextUsage(used: unknown, size: unknown): void {
+    const { core, catalog, sessionUri, hydraId } = this.deps;
+    const session = core.store.state(sessionUri) as SessionState | undefined;
+    if (!session || !catalog.isDefaultMember(hydraId) || !isCount(used) || !isCount(size) || size === 0) {
+      return;
+    }
+    const usageInfo = { currentTokens: used, tokenLimit: size, messagesLength: this.chatState()?.turns.length ?? 0 };
+    if (JSON.stringify(session._meta?.[CONTEXT_USAGE_KEY]) === JSON.stringify(usageInfo)) {
+      return;
+    }
+    core.publish(sessionUri, action({ type: "session/metaChanged", _meta: { ...session._meta, [CONTEXT_USAGE_KEY]: usageInfo } }));
+  }
+
   private syncInputNeeded(): void {
     const { core, chatUri, sessionUri } = this.deps;
     const session = core.store.state(sessionUri) as SessionState | undefined;

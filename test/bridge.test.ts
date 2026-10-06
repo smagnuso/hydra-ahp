@@ -176,6 +176,19 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     expect((oracle.state(CHAT) as ChatState).turns.at(-1)).toMatchObject({ state: "complete" });
   });
 
+  it("fills VS Code's context meter from the attach's usage and then from each live update", async () => {
+    harness = await startBridgeHarness((hydra) => {
+      hydra.newest = newest;
+      hydra.meta = { currentUsage: { used: 7, size: 100 } };
+    });
+    const { session } = await open(harness, version);
+    const meter = () => ((harness.core.store.state(SESSION) as SessionState)._meta ?? {})["copilot.usageInfo"];
+    expect(meter()).toEqual({ currentTokens: 7, tokenLimit: 100, messagesLength: 4 });
+    harness.hydra.listener!.update({ update: { sessionUpdate: "usage_update", used: 40, size: 100 } });
+    await session.waitFor((e) => e.channel === SESSION && e.action.type === "session/metaChanged" && JSON.stringify(e.action).includes('"currentTokens":40'));
+    expect(meter()).toMatchObject({ currentTokens: 40, tokenLimit: 100 });
+  });
+
   it("keeps the turn a replay left open when Hydra says the session is busy", async () => {
     harness = await startBridgeHarness((hydra) => {
       hydra.newest = { entries: fixture.history.filter((row) => row.seq === undefined || row.seq < maxSeq - 100), hasMore: false };
