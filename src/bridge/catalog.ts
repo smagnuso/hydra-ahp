@@ -80,7 +80,7 @@ export class Catalog {
   private readonly flagWrites = new Map<string, Promise<void>>();
   private readonly published = new Map<string, SessionSummary>();
   private readonly pendingCreations = new Set<string>();
-  private readonly reviveListeners = new Set<(hydraId: string) => void>();
+  private readonly reviveListeners = new Set<(hydraId: string, flag: "isRead" | "isArchived") => void>();
   private readonly changeListeners = new Set<() => void>();
   private cursor: number | undefined;
   private polls = 0;
@@ -217,25 +217,34 @@ export class Catalog {
     return this.isLocal(hydraId) ? this.setSessionFlags(hydraId, patch) : (this.options.flags?.set(hydraId, patch) ?? false);
   }
 
-  // Listeners hear of a session a new turn brought back from done, so its open channels can follow.
-  onRevived(listener: (hydraId: string) => void): void {
+  // Listeners hear of a mark a new turn cleared (unread, or back from done), so the session's open channels can follow.
+  onRevived(listener: (hydraId: string, flag: "isRead" | "isArchived") => void): void {
     this.reviveListeners.add(listener);
   }
 
-  // A turn that started after the session was marked done, from any client, brings it back.
+  // A turn that started after the session was marked read or done, from any client, clears the mark.
   noteTurn(hydraId: string, startedMs: number): void {
-    if (this.reviveIfDone(hydraId, startedMs)) {
+    if (this.reviveAfterTurn(hydraId, startedMs)) {
       this.reconcile();
     }
   }
 
-  private reviveIfDone(hydraId: string, startedMs: number): boolean {
+  private reviveAfterTurn(hydraId: string, startedMs: number): boolean {
     const flags = this.flagsFor(hydraId);
-    if (!flags.isArchived || startedMs <= (flags.archivedAt ?? 0) || !this.patchFlags(hydraId, { isArchived: false })) {
+    const cleared: ("isRead" | "isArchived")[] = [];
+    if (flags.isRead && startedMs > (flags.readAt ?? 0)) {
+      cleared.push("isRead");
+    }
+    if (flags.isArchived && startedMs > (flags.archivedAt ?? 0)) {
+      cleared.push("isArchived");
+    }
+    if (cleared.length === 0 || !this.patchFlags(hydraId, Object.fromEntries(cleared.map((flag) => [flag, false])))) {
       return false;
     }
-    for (const listener of this.reviveListeners) {
-      listener(hydraId);
+    for (const flag of cleared) {
+      for (const listener of this.reviveListeners) {
+        listener(hydraId, flag);
+      }
     }
     return true;
   }
@@ -369,7 +378,7 @@ export class Catalog {
     const before = this.entries.get(row.sessionId);
     this.entries.set(row.sessionId, before?.interactive === true && row.interactive !== true ? { ...row, interactive: true } : row);
     if (typeof row.turnStartedAt === "number") {
-      this.reviveIfDone(row.sessionId, row.turnStartedAt);
+      this.reviveAfterTurn(row.sessionId, row.turnStartedAt);
     }
   }
 

@@ -32,7 +32,7 @@ describe("flag store", () => {
     const again = new FlagStore(path);
     expect(again.get("hydra_session_a")).toEqual({ isRead: false, isArchived: true, archivedAt: store.get("hydra_session_a").archivedAt });
     expect(again.get("hydra_session_a").archivedAt).toBeTypeOf("number");
-    expect(again.get("beta:hydra_session_b")).toEqual({ isRead: true, isArchived: false });
+    expect(again.get("beta:hydra_session_b")).toEqual({ isRead: true, isArchived: false, readAt: expect.any(Number) });
     expect(again.get("unknown")).toEqual({ isRead: false, isArchived: false });
   });
 

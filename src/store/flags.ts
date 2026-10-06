@@ -4,19 +4,25 @@ import { dirname } from "node:path";
 export interface SessionFlags {
   isRead: boolean;
   isArchived: boolean;
-  // When the session was marked done, in ms; marks from before this was kept have none.
+  // When the session was marked read and done, in ms; marks from before these were kept have none.
+  readAt?: number;
   archivedAt?: number;
 }
 
 export const NO_FLAGS: SessionFlags = { isRead: false, isArchived: false };
 
 export function sameFlags(a: SessionFlags, b: SessionFlags): boolean {
-  return a.isRead === b.isRead && a.isArchived === b.isArchived && a.archivedAt === b.archivedAt;
+  return a.isRead === b.isRead && a.isArchived === b.isArchived && a.readAt === b.readAt && a.archivedAt === b.archivedAt;
 }
 
-// Marking done stamps the time and clearing it drops the time, so a later turn can tell whether it came after.
+// Setting a mark stamps the time and clearing it drops the time, so a later turn can tell whether it came after.
 export function patchedFlags(before: SessionFlags, patch: Partial<SessionFlags>, now = Date.now()): SessionFlags {
   const next = { ...before, ...patch };
+  if (!next.isRead) {
+    delete next.readAt;
+  } else if (!before.isRead && patch.readAt === undefined) {
+    next.readAt = now;
+  }
   if (!next.isArchived) {
     delete next.archivedAt;
   } else if (!before.isArchived && patch.archivedAt === undefined) {
@@ -27,10 +33,12 @@ export function patchedFlags(before: SessionFlags, patch: Partial<SessionFlags>,
 
 export function readFlags(value: unknown): SessionFlags {
   const raw = (value && typeof value === "object" ? value : {}) as Partial<Record<keyof SessionFlags, unknown>>;
+  const isRead = raw.isRead === true;
   const isArchived = raw.isArchived === true;
   return {
-    isRead: raw.isRead === true,
+    isRead,
     isArchived,
+    ...(isRead && typeof raw.readAt === "number" ? { readAt: raw.readAt } : {}),
     ...(isArchived && typeof raw.archivedAt === "number" ? { archivedAt: raw.archivedAt } : {}),
   };
 }

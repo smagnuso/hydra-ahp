@@ -58,7 +58,7 @@ describe("where read and archive marks live", () => {
     const { catalog, hydra } = harness;
 
     await settle(() => hydra.buckets.get("h1")?.flags !== undefined);
-    expect(hydra.buckets.get("h1")?.flags).toEqual({ isRead: true, isArchived: false });
+    expect(hydra.buckets.get("h1")?.flags).toEqual({ isRead: true, isArchived: false, readAt: expect.any(Number) });
     expect(catalog.flagsFor("h1").isRead).toBe(true);
     expect(new FlagStore(join(dir, "flags.json")).get("h1").isRead).toBe(false);
   });
