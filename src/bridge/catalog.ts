@@ -87,6 +87,7 @@ export class Catalog {
   private rawAgents: HydraAgent[] = [];
   private sessionDefaults: Record<string, Record<string, string>> = {};
   private agentList: AgentInfo[] = [];
+  private readonly changeTotals = new Map<string, { additions: number; deletions: number; files: number }>();
   private pollTimer: NodeJS.Timeout | undefined;
   private warmTimer: NodeJS.Timeout | undefined;
   private polling = false;
@@ -271,6 +272,15 @@ export class Catalog {
         this.flagWrites.delete(hydraId);
       }
     });
+  }
+
+  // Line and file totals of a session's changeset, kept once computed so its row shows them after it closes.
+  noteChanges(uri: string, totals: { additions: number; deletions: number; files: number }): void {
+    if (JSON.stringify(this.changeTotals.get(uri)) === JSON.stringify(totals)) {
+      return;
+    }
+    this.changeTotals.set(uri, totals);
+    this.reconcile();
   }
 
   summaryFor(uri: string): SessionSummary | undefined {
@@ -506,7 +516,9 @@ export class Catalog {
         flags: this.flagsFor(id),
         ...(this.sideOf(id) ? { origin: sideChatOrigin(this.sideOf(id) as SideOrigin) } : {}),
       }));
-      next.set(uri, groupToSummary(members, uri));
+      const summary = groupToSummary(members, uri);
+      const changes = this.changeTotals.get(uri);
+      next.set(uri, changes ? { ...summary, changes } : summary);
     }
     for (const uri of this.pendingCreations) {
       const held = this.published.get(uri);

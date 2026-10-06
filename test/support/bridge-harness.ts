@@ -196,6 +196,7 @@ export async function startBridgeHarness(
         membersOf: (uri) => catalog.membersOf(uri),
         startedAt: (uri) => catalog.startedAt(uri),
         editedPaths: async (id) => (await hydra.rest.sessionDiff(id)).map((file) => file.path),
+        onSessionTotals: (uri, totals) => catalog.noteChanges(uri, totals),
         pollMs: changesetPollMs,
         editsEveryMs: changesetPollMs,
       })

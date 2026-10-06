@@ -122,5 +122,14 @@ describe("uncommitted changes", () => {
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: kept?.before?.content.uri } as never)) as unknown as { data: string };
     expect(before.data).toBe("one\ntwo\n");
     expect(state().files.find((file) => file.id === cwdToUri(join(cwd, "new.txt")))?.edit.before).toBeUndefined();
+
+    const diffs = state().files.map((file) => (file.edit as { diff?: { added?: number; removed?: number } }).diff ?? {});
+    const totals = {
+      additions: diffs.reduce((sum, diff) => sum + (diff.added ?? 0), 0),
+      deletions: diffs.reduce((sum, diff) => sum + (diff.removed ?? 0), 0),
+      files: 3,
+    };
+    const listed = (await session.client.request("listSessions", {} as never)) as unknown as { items: { resource: string; changes?: unknown }[] };
+    expect(listed.items.find((item) => item.resource === SESSION)?.changes).toEqual(totals);
   });
 });

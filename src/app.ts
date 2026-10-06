@@ -80,6 +80,7 @@ export async function startApp(config: Config, version: string): Promise<App> {
     membersOf: (uri) => catalog.membersOf(uri),
     startedAt: (uri) => catalog.startedAt(uri),
     editedPaths: async (id) => (await rest.sessionDiff(id)).map((file) => file.path),
+    onSessionTotals: (uri, totals) => catalog.noteChanges(uri, totals),
   });
   const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, changesets, permissionDelayMs: config.permissionDelayMs });
   const core = new ProtocolCore({ backend, detachGraceMs: DETACH_GRACE_MS });

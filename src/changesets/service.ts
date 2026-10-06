@@ -52,6 +52,8 @@ export interface ChangesetServiceOptions {
   startedAt: (sessionUri: string) => string | undefined;
   // Absolute paths a Hydra session's tool calls edited, as Hydra aggregates them from its history.
   editedPaths: (hydraId: string) => Promise<string[]>;
+  // Receives the session changeset's line and file totals each time it is computed.
+  onSessionTotals?: (sessionUri: string, totals: { additions: number; deletions: number; files: number }) => void;
   pollMs?: number;
   editsEveryMs?: number;
 }
@@ -228,6 +230,9 @@ export class ChangesetService {
       }
     }
     watched.files = next;
+    if (watched.id === "session") {
+      this.options.onSessionTotals?.(watched.sessionUri, totalsOf(files));
+    }
     const state = this.core.store.state(uri) as ChangesetState | undefined;
     if (state?.status !== "ready") {
       this.publishStatus(uri, { status: "ready" });
@@ -241,6 +246,17 @@ export class ChangesetService {
 
 function unsafeSegment(segment: string): boolean {
   return segment === "" || segment === "." || segment === ".." || segment.includes("/") || segment.includes("\\");
+}
+
+function totalsOf(files: ChangesetFile[]): { additions: number; deletions: number; files: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const file of files) {
+    const diff = (file.edit as { diff?: { added?: number; removed?: number } }).diff;
+    additions += diff?.added ?? 0;
+    deletions += diff?.removed ?? 0;
+  }
+  return { additions, deletions, files: files.length };
 }
 
 function toChangesetFile(changesetUri: string, root: string, rev: string, file: ChangedFile): ChangesetFile {
