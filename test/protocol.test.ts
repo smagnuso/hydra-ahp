@@ -118,7 +118,7 @@ describe.each(["0.9.0", "1.0.0"])("protocol at %s", (version) => {
     expect(list.items).toHaveLength(1);
     expect(list.items[0]?.resource).toBe(SESSION);
     expect("chats" in (list.items[0] ?? {})).toBe(version === "1.0.0");
-    expect("defaultChat" in (list.items[0] ?? {})).toBe(version === "1.0.0");
+    expect("defaultChat" in (list.items[0] ?? {})).toBe(true);
   });
 
   it("sends root notifications only to root subscribers, shaped to the version", async () => {

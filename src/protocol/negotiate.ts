@@ -45,11 +45,12 @@ export function isAtLeast(version: string, minimum: string): boolean {
   return compareProtocolVersions(version, minimum) >= 0;
 }
 
-// SessionSummary.chats and defaultChat arrived in 1.0.0 (spec changelog).
+// SessionSummary.chats and defaultChat arrived in 1.0.0 (spec changelog). defaultChat is kept below
+// it: VS Code cannot mark a session read from its list until it knows the default chat's URI.
 export function shapeSummary<T extends Partial<SessionSummary>>(summary: T, version: string): T {
   if (isAtLeast(version, "1.0.0")) {
     return summary;
   }
-  const { chats: _chats, defaultChat: _defaultChat, ...rest } = summary;
+  const { chats: _chats, ...rest } = summary;
   return rest as T;
 }
