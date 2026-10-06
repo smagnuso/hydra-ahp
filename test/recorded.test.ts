@@ -70,7 +70,7 @@ describe("recorded Hydra update sequences", () => {
     expect(edit!.content[0].text).toContain("-one");
     expect(edit!.content[0].text).toContain("+two");
     expect(orphan).toMatchObject({ toolCallId: "orphan", displayName: "Late", status: "completed" });
-    expect(plan).toMatchObject({ status: "completed", content: [{ type: "text", text: "- [x] edit it" }] });
+    expect(plan).toMatchObject({ status: "completed", content: [{ type: "text", text: "✓ edit it" }] });
   });
 
   it("closes an interrupted tool call as failed and the turn as cancelled", () => {

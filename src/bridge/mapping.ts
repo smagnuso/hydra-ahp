@@ -167,11 +167,17 @@ function todosOf(update: Json): Json[] | undefined {
   return Array.isArray(todos) ? todos : undefined;
 }
 
-function entryLine(entry: Json): string {
+const PLAN_MARKS: Record<string, string> = { completed: "✓", in_progress: "▶", pending: "○" };
+
+// The markdown form bolds the step in progress, the only heavy line in the list, so it stands out in the row.
+function entryLine(entry: Json, markdown = false): string {
   const status = text(entry.status) ?? "pending";
-  const done = status === "completed";
-  const where = done || status === "pending" ? "" : ` (${status})`;
-  return `- [${done ? "x" : " "}] ${text(entry.content) ?? ""}${where}`;
+  const where = PLAN_MARKS[status] === undefined ? ` (${status})` : "";
+  const line = `${PLAN_MARKS[status] ?? "○"} ${text(entry.content) ?? ""}${where}`;
+  if (!markdown) {
+    return line;
+  }
+  return status === "in_progress" ? `- **${line}**` : `- ${line}`;
 }
 
 // Translates one chat's Hydra session/update stream into AHP chat actions, for replayed and live frames alike.
@@ -598,7 +604,7 @@ export class ChatMapper {
       type: "chat/toolCallReady",
       turnId: turn.id,
       toolCallId: call.id,
-      invocationMessage: call.displayName,
+      invocationMessage: call.message ?? call.displayName,
       confirmed: "not-needed",
       ...(call.input === undefined ? {} : { toolInput: call.input }),
       ...this.callMeta(call),
@@ -630,7 +636,7 @@ export class ChatMapper {
       toolCallId: call.id,
       result: {
         success,
-        pastTenseMessage: call.displayName,
+        pastTenseMessage: call.message ?? call.displayName,
         ...(content.length === 0 ? {} : { content }),
         ...(success ? {} : { error: { message: message === "" ? "The tool failed" : message } }),
       },
@@ -707,13 +713,15 @@ export class ChatMapper {
     const id = planId(turn.id);
     const first = !turn.calls.has(id);
     const call = this.callOf(turn, { toolCallId: id, title: "Plan", name: "plan" });
+    const entries = Array.isArray(update.entries) ? update.entries : [];
+    // VS Code shows a running call's output only through a channel of its own, so the list goes in the row itself.
+    call.message = { markdown: ["**Plan**", "", ...entries.map((entry) => entryLine(bag(entry), true))].join("\n") };
     if (first) {
       call.startedAt = at;
       actions.push(this.toolStart(turn, call));
       call.status = "in_progress";
-      actions.push(this.toolReady(turn, call));
     }
-    const entries = Array.isArray(update.entries) ? update.entries : [];
+    actions.push(this.toolReady(turn, call));
     call.content = entries.map((entry) => ({ type: "text", text: entryLine(bag(entry)) }));
     actions.push(this.toolContent(turn, call));
     return actions;

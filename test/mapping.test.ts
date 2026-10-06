@@ -87,8 +87,16 @@ describe("chat mapping", () => {
     const turn = folded.state.turns[0]!;
     const calls = turn.responseParts.filter((part) => part.kind === "toolCall");
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ toolCall: { toolCallId: "m9:plan", status: "completed", content: [{ text: "- [ ] step (in_progress)" }] } });
+    expect(calls[0]).toMatchObject({ toolCall: { toolCallId: "m9:plan", status: "completed", content: [{ text: "▶ step" }] } });
+    expect(calls[0]).toMatchObject({ toolCall: { pastTenseMessage: { markdown: "**Plan**\n\n- **▶ step**" } } });
     expect(folded.ignored).toEqual([]);
+  });
+
+  it("shows the whole plan in the plan row while it runs", () => {
+    const plan = (statuses: string[]) => frame({ sessionUpdate: "plan", entries: statuses.map((status, i) => ({ content: `step ${i}`, priority: "high", status })) });
+    const folded = foldRecorded([prompt("m8"), plan(["in_progress", "pending"]), plan(["completed", "in_progress"])]);
+    const part = folded.state.activeTurn!.responseParts[0] as { toolCall: Record<string, unknown> };
+    expect(part.toolCall).toMatchObject({ status: "running", invocationMessage: { markdown: "**Plan**\n\n- ✓ step 0\n- **▶ step 1**" } });
   });
 
   it("shows opencode's todowrite list as the turn's plan instead of as a tool call", () => {
@@ -110,7 +118,7 @@ describe("chat mapping", () => {
       toolCall: {
         toolCallId: "m7:plan",
         status: "completed",
-        content: [{ text: "- [x] inspect" }, { text: "- [ ] analyze (in_progress)" }, { text: "- [ ] summarize" }],
+        content: [{ text: "✓ inspect" }, { text: "▶ analyze" }, { text: "○ summarize" }],
       },
     });
     expect(folded.ignored).toEqual([]);

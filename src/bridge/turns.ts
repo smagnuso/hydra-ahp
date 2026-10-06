@@ -8,6 +8,8 @@ export interface Call {
   displayName: string;
   status?: string;
   input?: string;
+  // Shown in the call's row in place of displayName.
+  message?: { markdown: string };
   readied: boolean;
   asked: boolean;
   finished: boolean;
