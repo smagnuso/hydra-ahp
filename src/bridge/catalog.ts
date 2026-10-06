@@ -409,7 +409,8 @@ export class Catalog {
   private async lookUpStamps(): Promise<void> {
     const todo = [...this.entries.values()]
       .filter((e) => !e.remote && !isFederatedId(e.sessionId))
-      .filter((e) => e.interactive !== false && !this.stamps.has(e.sessionId) && !this.lookedUp.has(e.sessionId))
+      // Hydra marks a fork non-interactive until its first prompt, and a chat this extension forked may not have had one yet.
+      .filter((e) => (e.interactive !== false || e.forkedFromSessionId !== undefined) && !this.stamps.has(e.sessionId) && !this.lookedUp.has(e.sessionId))
       .map((e) => e.sessionId);
     let next = 0;
     const worker = async (): Promise<void> => {
