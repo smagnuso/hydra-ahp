@@ -24,6 +24,9 @@ export interface HydraSessionEntry {
   remote?: string;
   currentModel?: string;
   turnStartedAt?: number;
+  // Daemon read state: a turn ended that no client has marked read since.
+  unread?: boolean;
+  lastTurnEndedAt?: number;
   importedFromMachine?: string;
   upstreamSessionId?: string;
   parentSessionId?: string;
@@ -156,7 +159,7 @@ export class HydraRest {
     return this.request("DELETE", `/v1/sessions/${encodeURIComponent(id)}`);
   }
 
-  patchSession(id: string, body: { title?: string }): Promise<unknown> {
+  patchSession(id: string, body: { title?: string; read?: boolean }): Promise<unknown> {
     return this.request("PATCH", `/v1/sessions/${encodeURIComponent(id)}`, body);
   }
 

@@ -80,7 +80,11 @@ export class Catalog {
   private readonly flagWrites = new Map<string, Promise<void>>();
   private readonly published = new Map<string, SessionSummary>();
   private readonly pendingCreations = new Set<string>();
-  private readonly reviveListeners = new Set<(hydraId: string, flag: "isRead" | "isArchived") => void>();
+  private readonly flagListeners = new Set<(hydraId: string, flag: "isRead" | "isArchived", value: boolean) => void>();
+  // Read marks sent to the daemon and not yet reflected by a poll, with when they were sent.
+  private readonly readOverrides = new Map<string, { read: boolean; at: number }>();
+  // Each session's read state as of the last reconcile, so a change a poll brings can reach open channels.
+  private readonly lastRead = new Map<string, boolean>();
   private readonly changeListeners = new Set<() => void>();
   private cursor: number | undefined;
   private polls = 0;
@@ -198,31 +202,56 @@ export class Catalog {
   }
 
   flagsFor(hydraId: string): SessionFlags {
-    if (this.isLocal(hydraId)) {
-      return this.sessionFlags.get(hydraId) ?? NO_FLAGS;
-    }
-    return this.options.flags?.get(hydraId) ?? NO_FLAGS;
+    const stored = this.isLocal(hydraId) ? this.sessionFlags.get(hydraId) : this.options.flags?.get(hydraId);
+    return { ...(stored ?? NO_FLAGS), isRead: this.isRead(hydraId) };
   }
 
-  // Persists a read or archive change and tells root subscribers; returns whether anything changed.
+  // The daemon keeps read state; a mark this extension just sent stands in until a poll shows it.
+  private isRead(hydraId: string): boolean {
+    return this.readOverrides.get(hydraId)?.read ?? this.entries.get(hydraId)?.unread !== true;
+  }
+
+  // Sends a read change to the daemon or persists an archive change, and tells root subscribers; returns whether anything changed.
   setFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
-    const changed = this.patchFlags(hydraId, patch);
+    const { isRead, ...rest } = patch;
+    let changed = false;
+    if (isRead !== undefined && isRead !== this.isRead(hydraId)) {
+      this.readOverrides.set(hydraId, { read: isRead, at: Date.now() });
+      void this.rest.patchSession(hydraId, { read: isRead }).catch((err: unknown) => {
+        log.warn(`marking ${hydraId} ${isRead ? "read" : "unread"} failed`, err instanceof Error ? err.message : err);
+      });
+      changed = true;
+    }
+    if (Object.keys(rest).length > 0 && this.patchFlags(hydraId, rest)) {
+      changed = true;
+    }
     if (changed) {
       this.reconcile();
     }
     return changed;
   }
 
+  // A poll row settles a pending read mark once it agrees, or once a turn has ended since it was sent.
+  private settleReadOverride(row: HydraSessionEntry): void {
+    const pending = this.readOverrides.get(row.sessionId);
+    if (!pending) {
+      return;
+    }
+    if ((row.unread !== true) === pending.read || (row.lastTurnEndedAt ?? 0) > pending.at) {
+      this.readOverrides.delete(row.sessionId);
+    }
+  }
+
   private patchFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
     return this.isLocal(hydraId) ? this.setSessionFlags(hydraId, patch) : (this.options.flags?.set(hydraId, patch) ?? false);
   }
 
-  // Listeners hear of a mark a new turn cleared (unread, or back from done), so the session's open channels can follow.
-  onRevived(listener: (hydraId: string, flag: "isRead" | "isArchived") => void): void {
-    this.reviveListeners.add(listener);
+  // Listeners hear of a mark that changed without a client asking (a turn ended, or one brought the session back from done), so its open channels can follow.
+  onFlagChanged(listener: (hydraId: string, flag: "isRead" | "isArchived", value: boolean) => void): void {
+    this.flagListeners.add(listener);
   }
 
-  // A turn that started after the session was marked read or done, from any client, clears the mark.
+  // A turn that started after the session was marked done, from any client, brings it back.
   noteTurn(hydraId: string, startedMs: number): void {
     if (this.reviveAfterTurn(hydraId, startedMs)) {
       this.reconcile();
@@ -231,20 +260,11 @@ export class Catalog {
 
   private reviveAfterTurn(hydraId: string, startedMs: number): boolean {
     const flags = this.flagsFor(hydraId);
-    const cleared: ("isRead" | "isArchived")[] = [];
-    if (flags.isRead && startedMs > (flags.readAt ?? 0)) {
-      cleared.push("isRead");
-    }
-    if (flags.isArchived && startedMs > (flags.archivedAt ?? 0)) {
-      cleared.push("isArchived");
-    }
-    if (cleared.length === 0 || !this.patchFlags(hydraId, Object.fromEntries(cleared.map((flag) => [flag, false])))) {
+    if (!flags.isArchived || startedMs <= (flags.archivedAt ?? 0) || !this.patchFlags(hydraId, { isArchived: false })) {
       return false;
     }
-    for (const flag of cleared) {
-      for (const listener of this.reviveListeners) {
-        listener(hydraId, flag);
-      }
+    for (const listener of this.flagListeners) {
+      listener(hydraId, "isArchived", false);
     }
     return true;
   }
@@ -269,7 +289,7 @@ export class Catalog {
   // Writes for one session go out in order, so a quick read-then-unread cannot land reversed.
   private writeFlags(hydraId: string, flags: SessionFlags): void {
     const write = (): Promise<void> =>
-      flags.isRead || flags.isArchived ? this.extState.set(hydraId, AHP_FLAGS_KEY, flags) : this.extState.delete(hydraId, AHP_FLAGS_KEY);
+      flags.isArchived ? this.extState.set(hydraId, AHP_FLAGS_KEY, flags) : this.extState.delete(hydraId, AHP_FLAGS_KEY);
     const next = (this.flagWrites.get(hydraId) ?? Promise.resolve())
       .then(write)
       .catch((err: unknown) => {
@@ -377,6 +397,7 @@ export class Catalog {
   private setEntry(row: HydraSessionEntry): void {
     const before = this.entries.get(row.sessionId);
     this.entries.set(row.sessionId, before?.interactive === true && row.interactive !== true ? { ...row, interactive: true } : row);
+    this.settleReadOverride(row);
     if (typeof row.turnStartedAt === "number") {
       this.reviveAfterTurn(row.sessionId, row.turnStartedAt);
     }
@@ -419,6 +440,8 @@ export class Catalog {
     this.entries.delete(id);
     this.options.flags?.forget(id);
     this.sessionFlags.delete(id);
+    this.readOverrides.delete(id);
+    this.lastRead.delete(id);
     this.stamps.delete(id);
     this.chatStamps.delete(id);
     this.liveConfigs.delete(id);
@@ -464,7 +487,7 @@ export class Catalog {
     const legacy = this.options.flags?.get(hydraId);
     if (stored && typeof stored === "object") {
       this.sessionFlags.set(hydraId, readFlags(stored));
-    } else if (legacy && (legacy.isRead || legacy.isArchived)) {
+    } else if (legacy?.isArchived) {
       this.sessionFlags.set(hydraId, legacy);
       this.writeFlags(hydraId, legacy);
     }
@@ -514,6 +537,18 @@ export class Catalog {
     }
   }
 
+  // Tells listeners when a session's read state moved since the last reconcile, as when a turn ended with no client watching.
+  private noteRead(hydraId: string, flags: SessionFlags): SessionFlags {
+    const before = this.lastRead.get(hydraId);
+    this.lastRead.set(hydraId, flags.isRead);
+    if (before !== undefined && before !== flags.isRead) {
+      for (const listener of this.flagListeners) {
+        listener(hydraId, "isRead", flags.isRead);
+      }
+    }
+    return flags;
+  }
+
   // Diffs the listed set against what clients were last told and emits the root notifications.
   private reconcile(): void {
     this.rebuildIndex();
@@ -522,7 +557,7 @@ export class Catalog {
       const members: GroupMember[] = ids.map((id) => ({
         entry: this.entries.get(id) as HydraSessionEntry,
         chat: this.chatOf(id),
-        flags: this.flagsFor(id),
+        flags: this.noteRead(id, this.flagsFor(id)),
         ...(this.sideOf(id) ? { origin: sideChatOrigin(this.sideOf(id) as SideOrigin) } : {}),
       }));
       const summary = groupToSummary(members, uri);

@@ -1,28 +1,23 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+// isRead is the daemon's read state for the session (its row's `unread`), never stored here; only done marks are.
 export interface SessionFlags {
   isRead: boolean;
   isArchived: boolean;
-  // When the session was marked read and done, in ms; marks from before these were kept have none.
-  readAt?: number;
+  // When the session was marked done, in ms; marks from before this was kept have none.
   archivedAt?: number;
 }
 
 export const NO_FLAGS: SessionFlags = { isRead: false, isArchived: false };
 
 export function sameFlags(a: SessionFlags, b: SessionFlags): boolean {
-  return a.isRead === b.isRead && a.isArchived === b.isArchived && a.readAt === b.readAt && a.archivedAt === b.archivedAt;
+  return a.isRead === b.isRead && a.isArchived === b.isArchived && a.archivedAt === b.archivedAt;
 }
 
-// Setting a mark stamps the time and clearing it drops the time, so a later turn can tell whether it came after.
+// Marking done stamps the time and clearing it drops the time, so a later turn can tell whether it came after.
 export function patchedFlags(before: SessionFlags, patch: Partial<SessionFlags>, now = Date.now()): SessionFlags {
-  const next = { ...before, ...patch };
-  if (!next.isRead) {
-    delete next.readAt;
-  } else if (!before.isRead && patch.readAt === undefined) {
-    next.readAt = now;
-  }
+  const next = { ...before, ...patch, isRead: false };
   if (!next.isArchived) {
     delete next.archivedAt;
   } else if (!before.isArchived && patch.archivedAt === undefined) {
@@ -33,17 +28,15 @@ export function patchedFlags(before: SessionFlags, patch: Partial<SessionFlags>,
 
 export function readFlags(value: unknown): SessionFlags {
   const raw = (value && typeof value === "object" ? value : {}) as Partial<Record<keyof SessionFlags, unknown>>;
-  const isRead = raw.isRead === true;
   const isArchived = raw.isArchived === true;
   return {
-    isRead,
+    isRead: false,
     isArchived,
-    ...(isRead && typeof raw.readAt === "number" ? { readAt: raw.readAt } : {}),
     ...(isArchived && typeof raw.archivedAt === "number" ? { archivedAt: raw.archivedAt } : {}),
   };
 }
 
-// Read and archive marks of federated sessions, keyed by Hydra session id; local sessions keep theirs in extension_state.
+// Archive marks of federated sessions, keyed by Hydra session id; local sessions keep theirs in extension_state.
 export class FlagStore {
   private readonly flags = new Map<string, SessionFlags>();
 
@@ -62,7 +55,7 @@ export class FlagStore {
     if (sameFlags(next, before)) {
       return false;
     }
-    if (!next.isRead && !next.isArchived) {
+    if (!next.isArchived) {
       this.flags.delete(hydraId);
     } else {
       this.flags.set(hydraId, next);
@@ -88,12 +81,12 @@ export class FlagStore {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       for (const [id, value] of Object.entries(parsed)) {
         const flags = readFlags(value);
-        if (flags.isRead || flags.isArchived) {
+        if (flags.isArchived) {
           this.flags.set(id, flags);
         }
       }
     } catch {
-      // A corrupt file only loses read and archive marks.
+      // A corrupt file only loses archive marks.
     }
   }
 

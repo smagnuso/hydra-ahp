@@ -7,56 +7,72 @@ import { STATUS_IS_READ } from "../src/bridge/summary.js";
 const CHAT = chatOf("h1");
 const SESSION = sessionOf("h1");
 
-describe("a read mark and later turns", () => {
+describe("read state from the daemon", () => {
   let harness: BridgeHarness;
 
   afterEach(async () => {
     await harness.stop();
   });
 
-  it("clears when a turn starts after it, with no client watching", async () => {
+  const summaryRead = (): boolean => (harness.catalog.summaryFor(SESSION)!.status & STATUS_IS_READ) !== 0;
+  const channelRead = (uri: string): boolean =>
+    ((harness.core.store.state(uri) as { status: number }).status & STATUS_IS_READ) !== 0;
+
+  it("lists a session read unless the daemon says a turn ended unseen", async () => {
     harness = await startBridgeHarness((hydra) => {
-      hydra.rows = [ROW({ turnStartedAt: Date.now() - 60_000 })];
+      hydra.rows = [ROW()];
+    });
+    expect(summaryRead()).toBe(true);
+    harness.hydra.rows = [ROW({ unread: true, lastTurnEndedAt: Date.now() })];
+    await sleep(150);
+    expect(summaryRead()).toBe(false);
+  });
+
+  it("sends a client's mark to the daemon and shows it until a poll agrees", async () => {
+    const endedAt = Date.now() - 60_000;
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ unread: true, lastTurnEndedAt: endedAt })];
     });
     const session = await harness.connect();
     await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
     await session.client.subscribe(SESSION);
     session.client.dispatch(SESSION, act({ type: "session/isReadChanged", isRead: true }));
     await sleep(100);
-    expect(harness.catalog.flagsFor("h1")).toMatchObject({ isRead: true, readAt: expect.any(Number) });
-    session.client.unsubscribe(SESSION);
-    await sleep(150);
-    expect(harness.catalog.flagsFor("h1").isRead).toBe(true);
-    harness.hydra.rows = [ROW({ turnStartedAt: Date.now() + 1 })];
-    await sleep(150);
-    expect(harness.catalog.flagsFor("h1").isRead).toBe(false);
+    expect(harness.hydra.writes).toContainEqual({ method: "PATCH", id: "h1", params: { read: true } });
+    expect(summaryRead()).toBe(true);
     expect(harness.hydra.buckets.get("h1")?.flags).toBeUndefined();
-    expect(harness.catalog.summaryFor(SESSION)!.status & STATUS_IS_READ).toBe(0);
-  });
 
-  it("clears a mark from before read times were kept on any turn", async () => {
-    harness = await startBridgeHarness((hydra) => {
-      hydra.buckets.set("h1", { flags: { isRead: true, isArchived: false } });
-      hydra.rows = [ROW({ turnStartedAt: Date.now() - 60_000 })];
-    });
     await sleep(150);
-    expect(harness.catalog.flagsFor("h1").isRead).toBe(false);
+    expect(summaryRead()).toBe(true);
+    harness.hydra.rows = [ROW({ lastTurnEndedAt: endedAt })];
+    await sleep(150);
+    expect(summaryRead()).toBe(true);
   });
 
-  it("follows into an open chat channel", async () => {
+  it("lets a turn that ends after the mark make the session unread again", async () => {
     harness = await startBridgeHarness((hydra) => {
-      hydra.rows = [ROW({ turnStartedAt: Date.now() - 60_000 })];
+      hydra.rows = [ROW({ unread: true, lastTurnEndedAt: Date.now() - 60_000 })];
+    });
+    harness.catalog.setFlags("h1", { isRead: true });
+    expect(summaryRead()).toBe(true);
+    harness.hydra.rows = [ROW({ unread: true, lastTurnEndedAt: Date.now() + 1 })];
+    await sleep(150);
+    expect(summaryRead()).toBe(false);
+  });
+
+  it("follows into open session and chat channels", async () => {
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW()];
     });
     const session = await harness.connect();
     await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
     await session.client.subscribe(SESSION);
     await session.client.subscribe(CHAT);
-    session.client.dispatch(CHAT, act({ type: "chat/isReadChanged", isRead: true }));
     await sleep(100);
-    expect((harness.core.store.state(CHAT) as { status: number }).status & STATUS_IS_READ).toBe(STATUS_IS_READ);
-    harness.catalog.noteTurn("h1", Date.now() + 1);
-    await sleep(50);
-    expect((harness.core.store.state(CHAT) as { status: number }).status & STATUS_IS_READ).toBe(0);
-    expect((harness.core.store.state(SESSION) as { status: number }).status & STATUS_IS_READ).toBe(0);
+    expect(channelRead(CHAT)).toBe(true);
+    harness.hydra.rows = [ROW({ unread: true, lastTurnEndedAt: Date.now() })];
+    await sleep(150);
+    expect(channelRead(CHAT)).toBe(false);
+    expect(channelRead(SESSION)).toBe(false);
   });
 });

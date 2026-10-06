@@ -88,7 +88,7 @@ export class HydraBackend implements Backend {
     await this.terminals?.start(core);
     this.changesets?.start(core);
     this.catalog.onChange(() => this.onCatalogChange());
-    this.catalog.onRevived((hydraId, flag) => this.bridges.get(hydraId)?.showFlag(flag, false));
+    this.catalog.onFlagChanged((hydraId, flag, value) => this.bridges.get(hydraId)?.showFlag(flag, value));
     await this.catalog.start(core);
   }
 

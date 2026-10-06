@@ -33,7 +33,12 @@ describe("read and archive marks against a scratch daemon", () => {
     return result.items.find((item) => item.resource === sessionOf(id))?.status;
   }
 
-  // The marks live in the session's own extension_state, so they travel with it.
+  async function daemonRow(id: string): Promise<{ unread?: boolean } | undefined> {
+    const page = await daemon.admin.listSessions({ includeNonInteractive: true } as never);
+    return page.sessions.find((row) => row.sessionId === id);
+  }
+
+  // Done marks live in the session's own extension_state, so they travel with it.
   function marks(id: string): { isRead: boolean; isArchived: boolean } | undefined {
     const meta = JSON.parse(readFileSync(join(daemon.home, "sessions", id, "meta.json"), "utf8"));
     return meta.extensionState?.ahp?.flags;
@@ -93,10 +98,10 @@ describe("read and archive marks against a scratch daemon", () => {
     await until("row read", async () => (((await rowStatus(id)) ?? 0) & IS_READ) === IS_READ, 5_000);
   });
 
-  it("clears the read mark when the session sees new activity", async () => {
+  it("clears the read mark when a turn ends after it", async () => {
     const { id, view } = await opened();
     await view.dispatch({ type: "session/isReadChanged", isRead: true }, view.sessionUri);
-    await until("row read", async () => (((await rowStatus(id)) ?? 0) & IS_READ) === IS_READ);
+    await until("daemon has the read mark", async () => (await daemonRow(id))?.unread === false);
     await driver.prompt(id, "again");
     await until("row unread", async () => (((await rowStatus(id)) ?? 0) & IS_READ) === 0);
     await view.until("chat unread", (chat) => (chat.status & IS_READ) === 0 || undefined);

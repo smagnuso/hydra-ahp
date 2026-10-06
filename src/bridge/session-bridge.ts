@@ -740,24 +740,9 @@ export class SessionBridge implements SessionListener {
         this.deps.catalog.noteTurn(this.deps.hydraId, Date.parse(next.startedAt));
       }
     }
-    this.settleRead();
     this.sweepParked();
     this.syncChatSummary();
     this.syncInputNeeded();
-  }
-
-  // New activity clears the chat's read bit in the official reducers, so the stored mark follows it.
-  private settleRead(): void {
-    const { core, catalog, hydraId, sessionUri, chatUri } = this.deps;
-    const chat = core.store.state(chatUri) as ChatState | undefined;
-    if (!chat || (chat.status & STATUS_IS_READ) !== 0 || !catalog.flagsFor(hydraId).isRead) {
-      return;
-    }
-    catalog.setFlags(hydraId, { isRead: false });
-    const session = core.store.state(sessionUri) as SessionState | undefined;
-    if (session && catalog.isDefaultMember(hydraId) && (session.status & STATUS_IS_READ) !== 0) {
-      core.publish(sessionUri, action({ type: "session/isReadChanged", isRead: false }));
-    }
   }
 
   // Mirrors the chat's status and modification time into the session's chat catalog entry.

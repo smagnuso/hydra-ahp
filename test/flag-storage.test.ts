@@ -6,7 +6,7 @@ import { FlagStore } from "../src/store/flags.js";
 import { sleep } from "./support/harness.js";
 import { ROW, startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 
-describe("where read and archive marks live", () => {
+describe("where done marks live", () => {
   let harness: BridgeHarness | undefined;
   let dir: string | undefined;
 
@@ -25,7 +25,7 @@ describe("where read and archive marks live", () => {
     }
   };
 
-  it("keeps a local session's marks in its extension_state and a federated session's in the file", async () => {
+  it("keeps a local session's done mark in its extension_state and a federated session's in the file", async () => {
     dir = mkdtempSync(join(tmpdir(), "ahp-flags-"));
     const flags = new FlagStore(join(dir, "flags.json"));
     harness = await startBridgeHarness(
@@ -45,21 +45,21 @@ describe("where read and archive marks live", () => {
     await settle(() => hydra.buckets.get("h1")?.flags === undefined);
     expect(hydra.buckets.get("h1")?.flags).toBeUndefined();
 
-    expect(catalog.setFlags("peer:r1", { isRead: true })).toBe(true);
-    expect(flags.get("peer:r1").isRead).toBe(true);
+    expect(catalog.setFlags("peer:r1", { isArchived: true })).toBe(true);
+    expect(flags.get("peer:r1").isArchived).toBe(true);
     expect(hydra.buckets.has("peer:r1")).toBe(false);
   });
 
-  it("moves a local session's marks from the old file into its extension_state", async () => {
+  it("moves a local session's done mark from the old file into its extension_state", async () => {
     dir = mkdtempSync(join(tmpdir(), "ahp-flags-"));
     const flags = new FlagStore(join(dir, "flags.json"));
-    flags.set("h1", { isRead: true });
+    flags.set("h1", { isArchived: true });
     harness = await startBridgeHarness(() => undefined, { flags });
     const { catalog, hydra } = harness;
 
     await settle(() => hydra.buckets.get("h1")?.flags !== undefined);
-    expect(hydra.buckets.get("h1")?.flags).toEqual({ isRead: true, isArchived: false, readAt: expect.any(Number) });
-    expect(catalog.flagsFor("h1").isRead).toBe(true);
-    expect(new FlagStore(join(dir, "flags.json")).get("h1").isRead).toBe(false);
+    expect(hydra.buckets.get("h1")?.flags).toEqual({ isRead: false, isArchived: true, archivedAt: expect.any(Number) });
+    expect(catalog.flagsFor("h1").isArchived).toBe(true);
+    expect(new FlagStore(join(dir, "flags.json")).get("h1").isArchived).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FlagStore } from "../src/store/flags.js";
 import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, withFlagBits } from "../src/bridge/summary.js";
@@ -20,11 +20,11 @@ afterEach(() => {
 });
 
 describe("flag store", () => {
-  it("persists marks across instances in a 0600 file, keyed by session id including federated ones", () => {
+  it("persists done marks across instances in a 0600 file, keyed by session id including federated ones", () => {
     const path = scratch();
     const store = new FlagStore(path);
     expect(store.set("hydra_session_a", { isArchived: true })).toBe(true);
-    expect(store.set("beta:hydra_session_b", { isRead: true })).toBe(true);
+    expect(store.set("beta:hydra_session_b", { isArchived: true })).toBe(true);
     // Windows has no POSIX permission bits.
     if (process.platform !== "win32") {
       expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -32,20 +32,27 @@ describe("flag store", () => {
     const again = new FlagStore(path);
     expect(again.get("hydra_session_a")).toEqual({ isRead: false, isArchived: true, archivedAt: store.get("hydra_session_a").archivedAt });
     expect(again.get("hydra_session_a").archivedAt).toBeTypeOf("number");
-    expect(again.get("beta:hydra_session_b")).toEqual({ isRead: true, isArchived: false, readAt: expect.any(Number) });
+    expect(again.get("beta:hydra_session_b").isArchived).toBe(true);
     expect(again.get("unknown")).toEqual({ isRead: false, isArchived: false });
+  });
+
+  it("never keeps read marks, which live on the daemon", () => {
+    const path = scratch();
+    const store = new FlagStore(path);
+    expect(store.set("s", { isRead: true })).toBe(false);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ s: { isRead: true, isArchived: false } }));
+    expect(new FlagStore(path).get("s")).toEqual({ isRead: false, isArchived: false });
   });
 
   it("reports whether a set changed anything and drops entries that return to the default", () => {
     const path = scratch();
     const store = new FlagStore(path);
-    expect(store.set("s", { isRead: false })).toBe(false);
-    expect(store.set("s", { isRead: true })).toBe(true);
-    expect(store.set("s", { isRead: true })).toBe(false);
-    expect(store.set("s", { isRead: false })).toBe(true);
-    expect(JSON.parse(JSON.stringify(Object.fromEntries([["s", new FlagStore(path).get("s")]])))).toEqual({
-      s: { isRead: false, isArchived: false },
-    });
+    expect(store.set("s", { isArchived: false })).toBe(false);
+    expect(store.set("s", { isArchived: true })).toBe(true);
+    expect(store.set("s", { isArchived: true })).toBe(false);
+    expect(store.set("s", { isArchived: false })).toBe(true);
+    expect(new FlagStore(path).get("s")).toEqual({ isRead: false, isArchived: false });
   });
 
   it("forgets a deleted session and survives a corrupt file", () => {
