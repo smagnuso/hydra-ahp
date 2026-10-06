@@ -167,9 +167,27 @@ function todosOf(update: Json): Json[] | undefined {
   return Array.isArray(todos) ? todos : undefined;
 }
 
+const UNSOLICITED_LABEL = "The agent continued on its own";
+
 const PLAN_MARKS: Record<string, string> = { completed: "✓", in_progress: "▶", pending: "○" };
 
 // The markdown form bolds the step in progress, the only heavy line in the list, so it stands out in the row.
+// VS Code renders a terminal call from its input's command, so one whose command is not a single string stays a plain tool.
+function isShellCommand(call: Call): boolean {
+  if (call.kind !== "execute") {
+    return false;
+  }
+  if (call.input === undefined) {
+    return true;
+  }
+  try {
+    const command = bag(JSON.parse(call.input)).command;
+    return command === undefined || typeof command === "string";
+  } catch {
+    return false;
+  }
+}
+
 function entryLine(entry: Json, markdown = false): string {
   const status = text(entry.status) ?? "pending";
   const where = PLAN_MARKS[status] === undefined ? ` (${status})` : "";
@@ -537,29 +555,33 @@ export class ChatMapper {
     if (known) {
       // Agents often open a call with a placeholder title ("Preparing file…") and name it once the input is known.
       known.displayName = text(update.title) ?? known.displayName;
+      known.kind = text(update.kind) ?? known.kind;
       return known;
     }
     const id = String(update.toolCallId);
     const title = text(update.title) ?? id;
     const claude = bag(bag(update._meta).claudeCode);
     const name = text(claude.toolName) ?? text(update.name) ?? title;
-    const call: Call = { id, name, displayName: title, readied: false, asked: false, finished: false, content: [] };
+    const kind = text(update.kind);
+    const call: Call = { id, name, displayName: title, ...(kind ? { kind } : {}), readied: false, asked: false, finished: false, content: [] };
     turn.calls.set(id, call);
     delete turn.waiting;
     turn.parts.push({ id, kind: "toolCall" });
     return call;
   }
 
+  // A call's _meta replaces the one it had, so every lifecycle action carries all of it.
   private callMeta(call: Call): Json {
-    if (call.startedAt === undefined) {
-      return {};
+    const meta: Json = isShellCommand(call) ? { toolKind: "terminal", language: "shellscript" } : {};
+    if (call.startedAt !== undefined) {
+      const times: Json = { startedAt: iso(call.startedAt) };
+      if (call.endedAt !== undefined) {
+        times.endedAt = iso(call.endedAt);
+        times.durationMs = Math.max(0, call.endedAt - call.startedAt);
+      }
+      meta[HYDRA_META] = times;
     }
-    const times: Json = { startedAt: iso(call.startedAt) };
-    if (call.endedAt !== undefined) {
-      times.endedAt = iso(call.endedAt);
-      times.durationMs = Math.max(0, call.endedAt - call.startedAt);
-    }
-    return { _meta: { [HYDRA_META]: times } };
+    return Object.keys(meta).length > 0 ? { _meta: meta } : {};
   }
 
   // A fileEdit whose before and after are kept in the edit store, so a client diffs them in its own viewer.
@@ -753,9 +775,8 @@ export class ChatMapper {
     const meta = bag(bag(update._meta)[HYDRA_META]);
     const cause = bag(meta.cause);
     const label = text(cause.label);
-    const message = label
-      ? messageOf(label, "systemNotification", { [HYDRA_META]: { cause } })
-      : messageOf("", "agent", Object.keys(cause).length > 0 ? { [HYDRA_META]: { cause } } : undefined);
+    // An agent-kind message renders in VS Code as a request with no text, so an unlabelled wake-up is a notification too.
+    const message = messageOf(label ?? UNSOLICITED_LABEL, "systemNotification", Object.keys(cause).length > 0 ? { [HYDRA_META]: { cause } } : undefined);
     return this.start(id, at, message);
   }
 

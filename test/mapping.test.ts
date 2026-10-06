@@ -124,6 +124,27 @@ describe("chat mapping", () => {
     expect(folded.ignored).toEqual([]);
   });
 
+  it("marks shell commands as terminal calls for VS Code, and only those", () => {
+    const shell = foldRecorded([
+      prompt(),
+      call({ toolCallId: "sh", title: "ls", kind: "execute", status: "in_progress", rawInput: { command: "ls" } }),
+      call({ toolCallId: "argv", title: "ls", kind: "execute", status: "in_progress", rawInput: { command: ["ls", "-l"] } }),
+      call({ toolCallId: "rd", title: "Read", kind: "read", status: "in_progress", rawInput: { path: "a" } }),
+    ]);
+    const meta = (id: string) =>
+      (shell.state.activeTurn!.responseParts.find((part) => (part as { toolCall?: { toolCallId: string } }).toolCall?.toolCallId === id) as {
+        toolCall: { _meta?: Record<string, unknown> };
+      }).toolCall._meta ?? {};
+    expect(meta("sh")).toMatchObject({ toolKind: "terminal", language: "shellscript" });
+    expect(meta("argv").toolKind).toBeUndefined();
+    expect(meta("rd").toolKind).toBeUndefined();
+  });
+
+  it("shows a wake-up Hydra could not attribute as a notification, not an empty request", () => {
+    const turn = foldRecorded([frame({ sessionUpdate: "_hydra_turn_started", messageId: "w1", _meta: { "hydra-acp": { unsolicited: true } } }), say("hi")]).state.activeTurn!;
+    expect(turn.message).toMatchObject({ origin: { kind: "systemNotification" }, text: "The agent continued on its own" });
+  });
+
   it("ends turns by stop reason with a duration each time", () => {
     const run = (stop: string) => foldRecorded([prompt("a"), say("x"), done(stop)]).state.turns[0]!;
     expect(run("end_turn")).toMatchObject({ state: "complete", duration: 20 });

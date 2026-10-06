@@ -7,6 +7,8 @@ export interface Call {
   name: string;
   displayName: string;
   status?: string;
+  // ACP's tool kind (execute, read, edit, ...).
+  kind?: string;
   input?: string;
   // Shown in the call's row in place of displayName.
   message?: { markdown: string };

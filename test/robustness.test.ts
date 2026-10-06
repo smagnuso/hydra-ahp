@@ -94,7 +94,7 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
       ["a1", "complete", 400],
       ["a2", "complete", 250],
     ]);
-    expect(state.turns.map((turn) => turn.message.origin.kind)).toEqual(["agent", "agent"]);
+    expect(state.turns.map((turn) => turn.message.origin.kind)).toEqual(["systemNotification", "systemNotification"]);
   });
 
   it("puts the agent's answer to an injected steer in the steered turn even when it beats Hydra's reply", async () => {
@@ -122,7 +122,7 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
       turn.responseParts.map((part) => (part.kind === "markdown" ? part.content : "")).join("");
     const state = chat(session, oracle);
     expect(state.turns.map((turn) => [turn.id, turn.message.text, text(turn)])).toEqual([
-      ["a1", "", "working"],
+      ["a1", "The agent continued on its own", "working"],
       ["steer-s1", "change course", "steered answer"],
     ]);
   });
