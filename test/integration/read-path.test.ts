@@ -195,7 +195,7 @@ describe("read path against a scratch daemon", () => {
     const chat = chatOf(id);
     const turn = driver.prompt(id, "script:flood");
     await sleep(500);
-    const { oracle } = await subscribe(id);
+    const { oracle, chat: subscribed } = await subscribe(id);
     for (let i = 0; i < 4; i += 1) {
       const other = await openOther();
       await other.client.subscribe(chat);
@@ -204,8 +204,11 @@ describe("read path against a scratch daemon", () => {
       await other.shutdown();
     }
     await turn;
+    // On a slow runner the subscribe can take long enough that the flood ends inside the snapshot, leaving no turn end to wait for.
+    const endedInSnapshot = subscribed.activeTurn === undefined && subscribed.turns.length === 2;
     // The agent is done when its prompt resolves, but the extension can still be mapping the flood behind it.
-    await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete", 20_000).catch(async (err: Error) => {
+    const ended = endedInSnapshot ? Promise.resolve() : ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete", 20_000);
+    await ended.catch(async (err: Error) => {
       // Fails on CI runners only: tell a turn end the extension never saw from one the client never received.
       const probe = await openOther();
       const server = ((await probe.client.subscribe(chat)).result.snapshot as Snapshot).state as ChatState;
