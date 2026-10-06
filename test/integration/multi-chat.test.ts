@@ -112,6 +112,7 @@ describe("several chats in one session against a scratch daemon", () => {
     expect(members.find((s) => s.forkedFromSessionId === id)).toBeDefined();
     await chatState(forked);
     await until("copied turn appears", async () => (text(await chatState(forked), 0) === "first" ? true : undefined));
+    expect((await chatState(forked)).turns[0]?.responseParts.length).toBeGreaterThan(0);
     await say(forked, "after-fork", "next");
     const done = await chatState(forked);
     expect([text(done, 0), text(done, 1)]).toEqual(["first", "next"]);
