@@ -91,6 +91,31 @@ describe("chat mapping", () => {
     expect(folded.ignored).toEqual([]);
   });
 
+  it("shows opencode's todowrite list as the turn's plan instead of as a tool call", () => {
+    const todos = [
+      { content: "inspect", status: "completed", priority: "high" },
+      { content: "analyze", status: "in_progress", priority: "high" },
+      { content: "summarize", status: "pending", priority: "medium" },
+    ];
+    const folded = foldRecorded([
+      prompt("m7"),
+      call({ toolCallId: "t1", title: "todowrite", status: "pending", rawInput: {} }),
+      change({ toolCallId: "t1", title: "todowrite", status: "in_progress", rawInput: { todos: todos.slice(0, 2) } }),
+      change({ toolCallId: "t1", title: "3 todos", status: "completed", content: [{ type: "content", content: { type: "text", text: JSON.stringify(todos) } }], rawOutput: { output: JSON.stringify(todos), metadata: { todos } } }),
+      done(),
+    ]);
+    const calls = folded.state.turns[0]!.responseParts.filter((part) => part.kind === "toolCall");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      toolCall: {
+        toolCallId: "m7:plan",
+        status: "completed",
+        content: [{ text: "- [x] inspect" }, { text: "- [ ] analyze (in_progress)" }, { text: "- [ ] summarize" }],
+      },
+    });
+    expect(folded.ignored).toEqual([]);
+  });
+
   it("ends turns by stop reason with a duration each time", () => {
     const run = (stop: string) => foldRecorded([prompt("a"), say("x"), done(stop)]).state.turns[0]!;
     expect(run("end_turn")).toMatchObject({ state: "complete", duration: 20 });

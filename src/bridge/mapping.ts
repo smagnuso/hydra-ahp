@@ -160,6 +160,13 @@ function contentText(blocks: Json[]): string {
     .join("\n");
 }
 
+// opencode keeps its plan with a todowrite tool rather than ACP plan updates (some sessions send both): the list is in
+// rawInput.todos while it runs and rawOutput.metadata.todos once it completes, in the plan entry shape.
+function todosOf(update: Json): Json[] | undefined {
+  const todos = bag(update.rawInput).todos ?? bag(bag(update.rawOutput).metadata).todos;
+  return Array.isArray(todos) ? todos : undefined;
+}
+
 function entryLine(entry: Json): string {
   const status = text(entry.status) ?? "pending";
   const done = status === "completed";
@@ -171,6 +178,7 @@ function entryLine(entry: Json): string {
 export class ChatMapper {
   private turn: TurnContext | undefined;
   private readonly queued = new Set<string>();
+  private readonly todoCalls = new Set<string>();
   private lastAt = 0;
   private readonly clock: () => number;
   // Set once a turn was ended here ahead of Hydra, so its trailing frames do not open an orphan turn.
@@ -239,7 +247,7 @@ export class ChatMapper {
         return this.agentChunk("reasoning", update, at, frame);
       case "tool_call":
       case "tool_call_update":
-        return this.toolCall(update, at, frame);
+        return this.todoWrite(update, at, frame) ?? this.toolCall(update, at, frame);
       case "plan":
         return this.plan(update, at, frame);
       case "usage_update":
@@ -678,6 +686,18 @@ export class ChatMapper {
       actions.push(this.toolContent(turn, call));
     }
     return actions;
+  }
+
+  // A todowrite call becomes the turn's plan; its own updates are dropped, as they only repeat the list as JSON.
+  // Only its opening update carries the name, so the call is remembered by id.
+  private todoWrite(update: Json, at: number, frame: Frame): Json[] | undefined {
+    const id = text(update.toolCallId);
+    const todos = todosOf(update);
+    if (!id || (todos === undefined && text(update.title)?.toLowerCase() !== "todowrite" && !this.todoCalls.has(id))) {
+      return undefined;
+    }
+    this.todoCalls.add(id);
+    return todos === undefined ? NO_ACTIONS : this.plan({ entries: todos }, at, frame);
   }
 
   // One synthetic call holds the turn's plan, rewritten by every plan update and completed when the turn ends.
