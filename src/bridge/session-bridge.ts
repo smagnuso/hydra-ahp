@@ -194,8 +194,11 @@ export class SessionBridge implements SessionListener {
   }
 
   private newMapper(): ChatMapper {
-    const store = this.deps.edits;
-    return new ChatMapper(store ? { edits: { chatUri: this.deps.chatUri, put: (uri, text) => store.put(uri, text) } } : {});
+    const { edits: store, catalog } = this.deps;
+    return new ChatMapper({
+      ...(store ? { edits: { chatUri: this.deps.chatUri, put: (uri: string, text: string) => store.put(uri, text) } } : {}),
+      sourceOf: (hydraId) => (catalog.entry(hydraId) ? { session: catalog.uriFor(hydraId), chat: catalog.chatOf(hydraId) } : undefined),
+    });
   }
 
   get hydraId(): string {

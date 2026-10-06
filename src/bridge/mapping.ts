@@ -24,6 +24,8 @@ export interface MapperOptions {
   clock?: () => number;
   // Where an edit's before and after text is kept for clients to diff; without it edits show as unified-diff text.
   edits?: { chatUri: string; put: (uri: string, text: string) => void };
+  // The AHP session and chat of another Hydra session, for prompts it sent; undefined when it is not listed.
+  sourceOf?: (hydraId: string) => { session: string; chat: string } | undefined;
 }
 
 const MAX_OUTPUT_CHARS = 20_000;
@@ -491,9 +493,15 @@ export class ChatMapper {
     const id = (messageId && this.aliases.get(messageId)) ?? messageId ?? `prompt-${frame.seq ?? at}`;
     const sentBy = bag(update.sentBy);
     const origin = sentBy.fromSession || sentBy.fromLabel ? "agent" : "user";
-    const meta = Object.keys(sentBy).length > 0 ? { [HYDRA_META]: { sentBy } } : undefined;
+    const fromSession = text(sentBy.fromSession);
+    const source = fromSession ? this.options.sourceOf?.(fromSession) : undefined;
+    const meta: Json = {
+      ...(Object.keys(sentBy).length > 0 ? { [HYDRA_META]: { sentBy } } : {}),
+      // VS Code shows such a request as delegated from the sending session, with a link to it.
+      ...(source ? { "vscode.chat.delegation": { sourceSession: source.session, sourceChat: source.chat } } : {}),
+    };
     const queuedMessageId = messageId && this.queued.delete(messageId) ? messageId : undefined;
-    return this.start(id, at, messageOf(promptText(update.prompt), origin, meta), queuedMessageId);
+    return this.start(id, at, messageOf(promptText(update.prompt), origin, Object.keys(meta).length > 0 ? meta : undefined), queuedMessageId);
   }
 
   private userChunk(update: Json, at: number, frame: Frame): Json[] {

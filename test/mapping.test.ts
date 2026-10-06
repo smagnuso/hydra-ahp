@@ -145,6 +145,17 @@ describe("chat mapping", () => {
     expect(turn.message).toMatchObject({ origin: { kind: "systemNotification" }, text: "The agent continued on its own" });
   });
 
+  it("links a prompt another session sent back to that session, when it is listed", () => {
+    const mapper = new ChatMapper({ sourceOf: (id) => (id === "hs_known" ? { session: "claude:/hs_known", chat: "ahp-chat://default/x" } : undefined) });
+    const sent = (fromSession: string) =>
+      mapper.map(frame({ sessionUpdate: "prompt_received", messageId: `m-${fromSession}`, prompt: [{ type: "text", text: "hi" }], sentBy: { fromSession } }));
+    const started = (actions: Array<Record<string, unknown>>) =>
+      actions.find((action) => action.type === "chat/turnStarted") as { message: { _meta?: Record<string, unknown> } };
+    expect(started(sent("hs_known")).message._meta?.["vscode.chat.delegation"]).toEqual({ sourceSession: "claude:/hs_known", sourceChat: "ahp-chat://default/x" });
+    mapper.map(done());
+    expect(started(sent("hs_gone")).message._meta?.["vscode.chat.delegation"]).toBeUndefined();
+  });
+
   it("ends turns by stop reason with a duration each time", () => {
     const run = (stop: string) => foldRecorded([prompt("a"), say("x"), done(stop)]).state.turns[0]!;
     expect(run("end_turn")).toMatchObject({ state: "complete", duration: 20 });
