@@ -13,6 +13,7 @@ import {
 import { editContentUri } from "./edit-content.js";
 import { cwdToUri } from "./ids.js";
 import { patchedFiles } from "./patch.js";
+import { LinkStream, type SessionLinkResolver } from "./session-links.js";
 
 export interface Frame {
   update: Json;
@@ -26,6 +27,8 @@ export interface MapperOptions {
   edits?: { chatUri: string; put: (uri: string, text: string) => void };
   // The AHP session and chat of another Hydra session, for prompts it sent; undefined when it is not listed.
   sourceOf?: (hydraId: string) => { session: string; chat: string } | undefined;
+  // The link a client follows to another Hydra session, for rewriting the hydra:// links in text; undefined when it is not listed.
+  sessionLink?: SessionLinkResolver;
 }
 
 const MAX_OUTPUT_CHARS = 20_000;
@@ -222,6 +225,7 @@ export class ChatMapper {
   private readonly clock: () => number;
   // Set once a turn was ended here ahead of Hydra, so its trailing frames do not open an orphan turn.
   private silenced = false;
+  private links: { turnId: string; partId: string; stream: LinkStream } | undefined;
   private deferredSteer: { turnId: string; message: Json; pendingId?: string } | undefined;
   // The session's current model, stamped on the turns opened here so a client's model picker restores to it.
   model: string | undefined;
@@ -275,6 +279,12 @@ export class ChatMapper {
         return NO_ACTIONS;
       }
     }
+    const flushed = kind === "agent_message_chunk" ? NO_ACTIONS : this.flushLinks();
+    const actions = this.mapKind(kind, update, at, frame);
+    return flushed.length > 0 ? [...flushed, ...actions] : actions;
+  }
+
+  private mapKind(kind: string | undefined, update: Json, at: number, frame: Frame): Json[] {
     switch (kind) {
       case "prompt_received":
         return this.promptReceived(update, at, frame);
@@ -563,13 +573,40 @@ export class ChatMapper {
         part: { kind, id: part.id, content: "" },
       });
     }
+    const partId = (part as { id: string }).id;
+    if (kind === "markdown") {
+      body = this.linked(turn.id, partId, body);
+      if (body === "") {
+        return actions;
+      }
+    }
     actions.push({
       type: kind === "markdown" ? "chat/delta" : "chat/reasoning",
       turnId: turn.id,
-      partId: (part as { id: string }).id,
+      partId,
       content: body,
     });
     return actions;
+  }
+
+  // Message text passes through a LinkStream per part, so a hydra:// link split across chunks is rewritten whole.
+  private linked(turnId: string, partId: string, body: string): string {
+    const resolve = this.options.sessionLink;
+    if (!resolve) {
+      return body;
+    }
+    if (this.links?.partId !== partId) {
+      this.links = { turnId, partId, stream: new LinkStream(resolve) };
+    }
+    return this.links.stream.push(body);
+  }
+
+  // Lets out text held back as a possible link once the part it belongs to can get no more.
+  private flushLinks(): Json[] {
+    const links = this.links;
+    this.links = undefined;
+    const rest = links?.stream.flush();
+    return links && rest ? [{ type: "chat/delta", turnId: links.turnId, partId: links.partId, content: rest }] : NO_ACTIONS;
   }
 
   private callOf(turn: TurnContext, update: Json): Call {
@@ -820,7 +857,7 @@ export class ChatMapper {
       return NO_ACTIONS;
     }
     this.turn = undefined;
-    const actions: Json[] = [];
+    const actions: Json[] = [...this.flushLinks()];
     const plan = turn.calls.get(planId(turn.id));
     if (plan && !plan.finished) {
       plan.status = "completed";

@@ -7,7 +7,7 @@ import {
   type ChatState,
   type Snapshot,
 } from "@microsoft/agent-host-protocol";
-import { ChatMapper, type Frame } from "../../src/bridge/mapping.js";
+import { ChatMapper, type Frame, type MapperOptions } from "../../src/bridge/mapping.js";
 import { emptyChat, frameFromEntry, frameFromNotification } from "../../src/bridge/replay.js";
 import type { Json } from "../../src/bridge/turns.js";
 
@@ -85,8 +85,8 @@ export function blankChat(): ChatState {
 }
 
 // Runs a recorded Hydra update sequence through the mapper and the official chat reducer, flagging no-op actions.
-export function foldRecorded(frames: readonly Frame[], options: { closeOpen?: boolean } = {}): Folded {
-  const mapper = new ChatMapper();
+export function foldRecorded(frames: readonly Frame[], options: { closeOpen?: boolean; mapper?: MapperOptions } = {}): Folded {
+  const mapper = new ChatMapper(options.mapper);
   let state = blankChat();
   const actions: Json[] = [];
   const ignored: Json[] = [];

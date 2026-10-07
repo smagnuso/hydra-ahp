@@ -13,6 +13,7 @@ import { UnsupportedContent, chooseOption, confirmationOptions, isApproval, prom
 import { optionIdOf, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
 import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, summaryToSessionState, withFlagBits } from "./summary.js";
+import { vscodeSessionLink } from "./session-links.js";
 import { HYDRA_META, bag, text, type Json } from "./turns.js";
 
 const log = logger("bridge");
@@ -198,6 +199,7 @@ export class SessionBridge implements SessionListener {
     return new ChatMapper({
       ...(store ? { edits: { chatUri: this.deps.chatUri, put: (uri: string, text: string) => store.put(uri, text) } } : {}),
       sourceOf: (hydraId) => (catalog.entry(hydraId) ? { session: catalog.uriFor(hydraId), chat: catalog.chatOf(hydraId) } : undefined),
+      sessionLink: (hydraId) => (catalog.isListed(hydraId) ? vscodeSessionLink(catalog.uriFor(hydraId)) : undefined),
     });
   }
 
