@@ -4,6 +4,8 @@ import { dirname } from "node:path";
 export interface KnownModel {
   id: string;
   name: string;
+  // Whether the agent takes images with this model; ACP reports it per agent, so all of an agent's models agree.
+  vision?: boolean;
 }
 
 // Hydra only learns an agent's models once a session of it exists, so the lists seen so far are kept per agent.
@@ -36,10 +38,18 @@ export class ModelStore {
       return;
     }
     try {
-      const parsed = JSON.parse(raw) as Record<string, Array<{ id?: unknown; name?: unknown }>>;
+      const parsed = JSON.parse(raw) as Record<string, Array<{ id?: unknown; name?: unknown; vision?: unknown }>>;
       for (const [agentId, list] of Object.entries(parsed)) {
         const models = (Array.isArray(list) ? list : []).flatMap((item) =>
-          typeof item.id === "string" ? [{ id: item.id, name: typeof item.name === "string" ? item.name : item.id }] : [],
+          typeof item.id === "string"
+            ? [
+                {
+                  id: item.id,
+                  name: typeof item.name === "string" ? item.name : item.id,
+                  ...(typeof item.vision === "boolean" ? { vision: item.vision } : {}),
+                },
+              ]
+            : [],
         );
         if (models.length > 0) {
           this.models.set(agentId, models);

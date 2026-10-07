@@ -698,14 +698,20 @@ export class Catalog {
   }
 
   // A session of an agent is the only place Hydra reveals its models; remember them for the model picker.
-  noteModels(agentId: string | undefined, advertised: unknown): void {
+  noteModels(agentId: string | undefined, advertised: unknown, vision?: boolean): void {
     if (!agentId || !this.options.models || !Array.isArray(advertised)) {
       return;
     }
     const models: KnownModel[] = advertised.flatMap((item) => {
       const entry = item as { modelId?: unknown; name?: unknown };
       return typeof entry.modelId === "string"
-        ? [{ id: entry.modelId, name: typeof entry.name === "string" && entry.name !== "" ? entry.name : entry.modelId }]
+        ? [
+            {
+              id: entry.modelId,
+              name: typeof entry.name === "string" && entry.name !== "" ? entry.name : entry.modelId,
+              ...(vision === undefined ? {} : { vision }),
+            },
+          ]
         : [];
     });
     if (this.options.models.set(agentId, models) && this.ready) {
@@ -836,7 +842,8 @@ function defaultFirst(models: readonly KnownModel[], model: string | undefined):
   if (!model) {
     return models;
   }
-  const known = models.find((entry) => entry.id === model) ?? { id: model, name: model };
+  const vision = models[0]?.vision;
+  const known = models.find((entry) => entry.id === model) ?? { id: model, name: model, ...(vision === undefined ? {} : { vision }) };
   return [known, ...models.filter((entry) => entry.id !== model)];
 }
 
@@ -850,7 +857,12 @@ function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[], available
     provider: agent.id,
     displayName: agent.name || agent.id,
     description: available ? description : [description, UNAVAILABLE].filter(Boolean).join(" "),
-    models: models.map((model) => ({ id: model.id, provider: agent.id, name: model.name })),
+    models: models.map((model) => ({
+      id: model.id,
+      provider: agent.id,
+      name: model.name,
+      ...(model.vision === undefined ? {} : { supportsVision: model.vision }),
+    })),
     capabilities: { multipleChats: { fork: true, sideChat: true } },
   };
 }

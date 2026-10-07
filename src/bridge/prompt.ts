@@ -16,6 +16,12 @@ export function promptCapabilities(meta: Json): PromptCapabilities {
   return { image: caps.image === true, embeddedContext: caps.embeddedContext === true };
 }
 
+// Whether the agent takes images, or undefined when Hydra did not say.
+export function imageSupport(meta: Json): boolean | undefined {
+  const caps = bag(bag(meta.agentCapabilities).promptCapabilities);
+  return typeof caps.image === "boolean" ? caps.image : undefined;
+}
+
 function decodedSize(base64: string): number {
   const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
   return Math.floor((base64.length * 3) / 4) - padding;

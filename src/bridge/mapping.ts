@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import {
   HYDRA_META,
   bag,
@@ -11,8 +12,11 @@ import {
   type TurnContext,
 } from "./turns.js";
 import { editContentUri } from "./edit-content.js";
-import { cwdToUri } from "./ids.js";
+import { mimeFor } from "../files/service.js";
+import { cwdToUri, uriToCwd } from "./ids.js";
+import type { ImageReader } from "./images.js";
 import { patchedFiles } from "./patch.js";
+import { MAX_IMAGE_BYTES } from "./prompt.js";
 import type { FileLinks } from "./file-links.js";
 import { LinkStream, type SessionLinkResolver } from "./session-links.js";
 
@@ -32,6 +36,8 @@ export interface MapperOptions {
   sessionLink?: SessionLinkResolver;
   // Links for the files message text names, against the session's cwd on this machine.
   fileLinks?: FileLinks;
+  // Reads an image file a tool saved, so it shows inline; only for sessions whose files are on this machine.
+  readImage?: ImageReader;
 }
 
 const MAX_OUTPUT_CHARS = 20_000;
@@ -60,9 +66,6 @@ function promptText(prompt: unknown): string {
         lines.push(text(resource.text) ?? text(resource.uri) ?? "");
         break;
       }
-      case "image":
-        lines.push("[image]");
-        break;
       default:
         break;
     }
@@ -74,8 +77,28 @@ export function withModel(message: Json, model: string | undefined): Json {
   return model && message.model === undefined ? { ...message, model: { id: model } } : message;
 }
 
-function messageOf(body: string, kind: string, meta?: Json): Json {
-  return { text: body, origin: { kind }, ...(meta ? { _meta: meta } : {}) };
+function messageOf(body: string, kind: string, meta?: Json, attachments: Json[] = []): Json {
+  return { text: body, origin: { kind }, ...(attachments.length > 0 ? { attachments } : {}), ...(meta ? { _meta: meta } : {}) };
+}
+
+// The images a prompt carried, as the attachments a client sent them as.
+function promptImages(prompt: unknown): Json[] {
+  if (!Array.isArray(prompt)) {
+    return [];
+  }
+  return prompt.flatMap((block) => {
+    const entry = bag(block);
+    const data = text(entry.data);
+    const mimeType = text(entry.mimeType);
+    if (entry.type !== "image" || !data || !mimeType?.startsWith("image/")) {
+      return [];
+    }
+    return [{ type: "embeddedResource", label: "Image", displayKind: "image", data, contentType: mimeType }];
+  });
+}
+
+function promptMessage(prompt: unknown, kind: string, meta?: Json): Json {
+  return messageOf(promptText(prompt), kind, meta, promptImages(prompt));
 }
 
 function diffText(path: string, oldText: string, newText: string): string {
@@ -113,7 +136,32 @@ function plainEdit(path: string, before: string | undefined, after: string): Jso
   return { type: "text", text: diffText(path, before, after) };
 }
 
-function contentBlocks(update: Json, edit?: EditBlock): Json[] {
+// An image a tool returned: inline data, or a saved file read in when it is on this machine, as embedded content (which VS Code
+// shows inline); any other saved file as a reference, which VS Code shows as a link it opens through resource*.
+function imageBlock(inner: Json, readImage?: ImageReader): Json | undefined {
+  if (inner.type === "image") {
+    const data = text(inner.data);
+    const mimeType = text(inner.mimeType);
+    if (!data || !mimeType?.startsWith("image/") || (data.length * 3) / 4 > MAX_IMAGE_BYTES) {
+      return undefined;
+    }
+    return { type: "embeddedResource", data, contentType: mimeType };
+  }
+  if (inner.type === "resource_link") {
+    const raw = text(inner.uri) ?? text(inner.name);
+    const uri = raw?.startsWith("file:") ? raw : raw && isAbsolute(raw) ? cwdToUri(raw) : undefined;
+    const mimeType = text(inner.mimeType) ?? (raw ? mimeFor(raw) : undefined);
+    if (!uri || !mimeType?.startsWith("image/")) {
+      return undefined;
+    }
+    const path = uriToCwd(uri);
+    const data = path ? readImage?.(path) : undefined;
+    return data ? { type: "embeddedResource", data, contentType: mimeType } : { type: "resource", uri, contentType: mimeType };
+  }
+  return undefined;
+}
+
+function contentBlocks(update: Json, edit?: EditBlock, readImage?: ImageReader): Json[] {
   const blocks: Json[] = [];
   const stats = editStatsOf(update);
   const seen = new Map<string, number>();
@@ -136,6 +184,10 @@ function contentBlocks(update: Json, edit?: EditBlock): Json[] {
       const inner = bag(entry.content);
       if (inner.type === "text" && typeof inner.text === "string") {
         blocks.push({ type: "text", text: inner.text });
+      }
+      const image = imageBlock(inner, readImage);
+      if (image) {
+        blocks.push(image);
       }
     } else if (entry.type === "diff" && typeof entry.path === "string") {
       const path = entry.path;
@@ -229,6 +281,8 @@ export class ChatMapper {
   // Set once a turn was ended here ahead of Hydra, so its trailing frames do not open an orphan turn.
   private silenced = false;
   private links: { turnId: string; partId: string; stream: LinkStream } | undefined;
+  // Which tool call carries each image file inline; a later call showing the same file links it instead of repeating it.
+  private readonly inlined = new Map<string, string>();
   private deferredSteer: { turnId: string; message: Json; pendingId?: string } | undefined;
   // The session's current model, stamped on the turns opened here so a client's model picker restores to it.
   model: string | undefined;
@@ -322,7 +376,7 @@ export class ChatMapper {
       return NO_ACTIONS;
     }
     this.queued.add(id);
-    return [{ type: "chat/pendingMessageSet", kind: "queued", id, message: messageOf(promptText(params.prompt), "user") }];
+    return [{ type: "chat/pendingMessageSet", kind: "queued", id, message: promptMessage(params.prompt, "user") }];
   }
 
   queueUpdated(params: Json): Json[] {
@@ -330,7 +384,7 @@ export class ChatMapper {
     if (!id || !this.queued.has(id)) {
       return NO_ACTIONS;
     }
-    return [{ type: "chat/pendingMessageSet", kind: "queued", id, message: messageOf(promptText(params.prompt), "user") }];
+    return [{ type: "chat/pendingMessageSet", kind: "queued", id, message: promptMessage(params.prompt, "user") }];
   }
 
   queueRemoved(params: Json): Json[] {
@@ -360,7 +414,7 @@ export class ChatMapper {
     }
     for (const [id, entry] of waiting) {
       this.queued.add(id);
-      actions.push({ type: "chat/pendingMessageSet", kind: "queued", id, message: messageOf(promptText(entry.prompt), "user") });
+      actions.push({ type: "chat/pendingMessageSet", kind: "queued", id, message: promptMessage(entry.prompt, "user") });
     }
     return actions;
   }
@@ -528,7 +582,7 @@ export class ChatMapper {
       ...(source ? { "vscode.chat.delegation": { sourceSession: source.session, sourceChat: source.chat } } : {}),
     };
     const queuedMessageId = messageId && this.queued.delete(messageId) ? messageId : undefined;
-    return this.start(id, at, messageOf(promptText(update.prompt), origin, Object.keys(meta).length > 0 ? meta : undefined), queuedMessageId);
+    return this.start(id, at, promptMessage(update.prompt, origin, Object.keys(meta).length > 0 ? meta : undefined), queuedMessageId);
   }
 
   private userChunk(update: Json, at: number, frame: Frame): Json[] {
@@ -606,6 +660,24 @@ export class ChatMapper {
       };
     }
     return this.links.stream.push(body);
+  }
+
+  private imageReader(toolCallId: string): ImageReader | undefined {
+    const read = this.options.readImage;
+    if (!read) {
+      return undefined;
+    }
+    return (path) => {
+      const owner = this.inlined.get(path);
+      if (owner !== undefined && owner !== toolCallId) {
+        return undefined;
+      }
+      const data = read(path);
+      if (data !== undefined) {
+        this.inlined.set(path, toolCallId);
+      }
+      return data;
+    };
   }
 
   get holding(): boolean {
@@ -775,7 +847,7 @@ export class ChatMapper {
     if (arrived !== undefined) {
       call.input = arrived;
     }
-    const blocks = contentBlocks(update, this.editBlock(update.toolCallId as string));
+    const blocks = contentBlocks(update, this.editBlock(update.toolCallId as string), this.imageReader(update.toolCallId as string));
     if (blocks.length > 0) {
       call.content = blocks;
     }

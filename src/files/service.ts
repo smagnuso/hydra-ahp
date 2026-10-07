@@ -97,7 +97,7 @@ function onThisHost(uri: string): boolean {
   }
 }
 
-function mimeFor(path: string): string | undefined {
+export function mimeFor(path: string): string | undefined {
   return MIME_BY_EXT[extname(path).toLowerCase()];
 }
 

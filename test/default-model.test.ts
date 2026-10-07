@@ -43,4 +43,24 @@ describe("default model", () => {
     }
     expect(ids()).toEqual(["nova", "image", "luna"]);
   });
+  it("marks an agent's models as taking images once a session of it says so, and keeps that across restarts", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-models-"));
+    const path = join(dir, "models.json");
+    harness = await startBridgeHarness(
+      (hydra) => {
+        hydra.rest.agents = async () => ({ agents: [{ id: "fake-dev", name: "Fake (dev)" }] });
+        hydra.rest.config = async () => ({ sessionDefaults: { "fake-dev": { model: "nova" } } });
+      },
+      { models: new ModelStore(path) },
+    );
+    harness.catalog.noteModels("fake-dev", [{ modelId: "luna", name: "Luna" }], true);
+    expect(harness.catalog.agents()[0]?.models).toEqual([
+      { id: "nova", provider: "fake-dev", name: "nova", supportsVision: true },
+      { id: "luna", provider: "fake-dev", name: "Luna", supportsVision: true },
+    ]);
+    expect(new ModelStore(path).get("fake-dev")).toEqual([{ id: "luna", name: "Luna", vision: true }]);
+
+    harness.catalog.noteModels("fake-dev", [{ modelId: "luna", name: "Luna" }]);
+    expect(harness.catalog.agents()[0]?.models[1]).toEqual({ id: "luna", provider: "fake-dev", name: "Luna" });
+  });
 });

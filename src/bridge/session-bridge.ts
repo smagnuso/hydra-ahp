@@ -9,11 +9,12 @@ import { ErrorCodes, RpcError } from "../rpc/peer.js";
 import { logger } from "../util/log.js";
 import { sideChatOrigin, type Catalog } from "./catalog.js";
 import { ChatMapper, withModel, type Frame } from "./mapping.js";
-import { UnsupportedContent, chooseOption, confirmationOptions, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
+import { UnsupportedContent, chooseOption, confirmationOptions, imageSupport, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
 import { optionIdOf, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
 import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, summaryToSessionState, withFlagBits } from "./summary.js";
 import { FileLinks } from "./file-links.js";
+import { readLocalImage } from "./images.js";
 import { vscodeSessionLink } from "./session-links.js";
 import { HYDRA_META, bag, text, type Json } from "./turns.js";
 
@@ -204,7 +205,7 @@ export class SessionBridge implements SessionListener {
       ...(store ? { edits: { chatUri: this.deps.chatUri, put: (uri: string, text: string) => store.put(uri, text) } } : {}),
       sourceOf: (hydraId) => (catalog.entry(hydraId) ? { session: catalog.uriFor(hydraId), chat: catalog.chatOf(hydraId) } : undefined),
       sessionLink: (hydraId) => (catalog.isListed(hydraId) ? vscodeSessionLink(catalog.uriFor(hydraId)) : undefined),
-      ...(cwd ? { fileLinks: new FileLinks(cwd) } : {}),
+      ...(cwd ? { fileLinks: new FileLinks(cwd), readImage: readLocalImage } : {}),
     });
   }
 
@@ -395,7 +396,7 @@ export class SessionBridge implements SessionListener {
       throw toRpc(err);
     }
 
-    this.deps.catalog.noteModels(this.entry()?.agentId, meta.availableModels);
+    this.deps.catalog.noteModels(this.entry()?.agentId, meta.availableModels, imageSupport(meta));
     this.deps.catalog.noteConfig(hydraId, parseConfigOptions(configOptions));
     this.ensureSessionChannel();
 

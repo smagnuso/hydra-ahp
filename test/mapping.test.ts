@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ChatState } from "@microsoft/agent-host-protocol";
 import { ChatMapper, type Frame } from "../src/bridge/mapping.js";
@@ -281,5 +282,63 @@ describe("chat mapping", () => {
     mapper.model = "gpt-6-luna";
     const started = mapper.map(prompt("m2")).find((action) => action.type === "chat/turnStarted");
     expect(started).toMatchObject({ message: { model: { id: "gpt-6-luna" } } });
+  });
+  it("shows a tool's images: inline data as embedded content, a saved file as a resource", () => {
+    const png = "iVBORw0KGgo=";
+    const folded = foldRecorded([
+      prompt(),
+      call({ status: "in_progress" }),
+      change({
+        status: "completed",
+        content: [
+          { type: "content", content: { type: "image", mimeType: "image/png", data: png } },
+          { type: "content", content: { type: "resource_link", name: "/tmp/shot.png", uri: "/tmp/shot.png" } },
+          { type: "content", content: { type: "resource_link", name: "notes.txt", uri: "/tmp/notes.txt" } },
+        ],
+      }),
+    ]);
+    const complete = folded.actions.find((a) => a.type === "chat/toolCallComplete") as { result: { content: unknown[] } };
+    expect(complete.result.content).toEqual([
+      { type: "embeddedResource", data: png, contentType: "image/png" },
+      { type: "resource", uri: pathToFileURL("/tmp/shot.png").href, contentType: "image/png" },
+    ]);
+  });
+
+  it("gives a replayed prompt its images back as attachments", () => {
+    const folded = foldRecorded([
+      frame({
+        sessionUpdate: "prompt_received",
+        messageId: "m1",
+        prompt: [
+          { type: "text", text: "look" },
+          { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        ],
+        sentBy: { clientId: "c" },
+      }),
+    ]);
+    expect(folded.state.activeTurn?.message).toMatchObject({
+      text: "look",
+      attachments: [{ type: "embeddedResource", label: "Image", displayKind: "image", data: "iVBORw0KGgo=", contentType: "image/png" }],
+    });
+  });
+  it("inlines a saved image it can read, and links one it cannot", () => {
+    const saved = (uri: string) =>
+      change({ status: "completed", content: [{ type: "content", content: { type: "resource_link", name: uri, uri } }] });
+    const shown = (path: string): unknown => {
+      const folded = foldRecorded([prompt(), call({ status: "in_progress" }), saved(path)], {
+        mapper: { readImage: (file) => (file.endsWith("shot.png") ? "iVBORw0KGgo=" : undefined) },
+      });
+      return (folded.actions.find((a) => a.type === "chat/toolCallComplete") as { result: { content: unknown[] } }).result.content;
+    };
+    expect(shown("/tmp/shot.png")).toEqual([{ type: "embeddedResource", data: "iVBORw0KGgo=", contentType: "image/png" }]);
+    expect(shown("/tmp/huge.png")).toEqual([{ type: "resource", uri: pathToFileURL("/tmp/huge.png").href, contentType: "image/png" }]);
+  });
+
+  it("carries an image file inline once, linking it from later calls", () => {
+    const view = (id: string) =>
+      frame({ sessionUpdate: "tool_call_update", toolCallId: id, status: "completed", content: [{ type: "content", content: { type: "resource_link", name: "/tmp/shot.png", uri: "/tmp/shot.png" } }] });
+    const folded = foldRecorded([prompt(), view("a"), view("a"), view("b")], { mapper: { readImage: () => "iVBORw0KGgo=" } });
+    const kinds = folded.state.activeTurn!.responseParts.map((part) => ((part as { toolCall?: { content?: Array<{ type: string }> } }).toolCall?.content ?? []).map((c) => c.type));
+    expect(kinds).toEqual([["embeddedResource"], ["resource"]]);
   });
 });
