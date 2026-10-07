@@ -13,6 +13,7 @@ import { UnsupportedContent, chooseOption, confirmationOptions, isApproval, prom
 import { optionIdOf, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
 import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, summaryToSessionState, withFlagBits } from "./summary.js";
+import { FileLinks } from "./file-links.js";
 import { vscodeSessionLink } from "./session-links.js";
 import { HYDRA_META, bag, text, type Json } from "./turns.js";
 
@@ -25,6 +26,7 @@ const INITIAL_TURNS = 20;
 const SETTLE_WAIT_MS = 500;
 const ECHO_WAIT_MS = 5_000;
 const STEER_RETRY_MS = 500;
+const RELEASE_HELD_MS = 200;
 
 // A prompt this bridge sent to Hydra. Hydra never echoes its own prompt_received or turn_complete to the sender.
 interface OwnEntry {
@@ -166,6 +168,7 @@ export class SessionBridge implements SessionListener {
   private highWater: number | undefined;
   private sawClosed = false;
   private chain: Promise<unknown> = Promise.resolve();
+  private releaseTimer: ReturnType<typeof setTimeout> | undefined;
   private fetching: Promise<void> | undefined;
   private disposed = false;
   private clientId: string | undefined;
@@ -196,10 +199,12 @@ export class SessionBridge implements SessionListener {
 
   private newMapper(): ChatMapper {
     const { edits: store, catalog } = this.deps;
+    const cwd = catalog.localCwdOf(this.deps.sessionUri);
     return new ChatMapper({
       ...(store ? { edits: { chatUri: this.deps.chatUri, put: (uri: string, text: string) => store.put(uri, text) } } : {}),
       sourceOf: (hydraId) => (catalog.entry(hydraId) ? { session: catalog.uriFor(hydraId), chat: catalog.chatOf(hydraId) } : undefined),
       sessionLink: (hydraId) => (catalog.isListed(hydraId) ? vscodeSessionLink(catalog.uriFor(hydraId)) : undefined),
+      ...(cwd ? { fileLinks: new FileLinks(cwd) } : {}),
     });
   }
 
@@ -241,6 +246,7 @@ export class SessionBridge implements SessionListener {
   }
 
   dispose(): Promise<void> {
+    clearTimeout(this.releaseTimer);
     this.releaseSteerHold();
     this.disposed = true;
     return this.serial(async () => {
@@ -283,6 +289,28 @@ export class SessionBridge implements SessionListener {
       return;
     }
     this.handle(event, (actions) => this.publish(actions));
+    this.armRelease();
+  }
+
+  // Text held back as a possible link goes out once the agent pauses, so a word never waits for the next update.
+  private armRelease(): void {
+    clearTimeout(this.releaseTimer);
+    this.releaseTimer = undefined;
+    if (!this.mapper.holding) {
+      return;
+    }
+    this.releaseTimer = setTimeout(() => {
+      this.releaseTimer = undefined;
+      if (this.disposed) {
+        return;
+      }
+      if (this.buffering || this.steerHold) {
+        this.armRelease();
+        return;
+      }
+      this.publish(this.mapper.releaseHeld());
+    }, RELEASE_HELD_MS);
+    this.releaseTimer.unref?.();
   }
 
   private entry(): HydraSessionEntry | undefined {
@@ -397,6 +425,7 @@ export class SessionBridge implements SessionListener {
         this.handle(event, collect);
       }
     }
+    this.armRelease();
     this.highWater = undefined;
     collect(this.mapper.syncQueue(this.foreignQueue(meta.queue)));
     this.midTurn(meta, collect);

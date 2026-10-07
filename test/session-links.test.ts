@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { ChatMapper, type Frame } from "../src/bridge/mapping.js";
-import { holdFrom, LinkStream, rewriteSessionLinks, vscodeSessionLink } from "../src/bridge/session-links.js";
+import { holdFrom, LinkStream, rewriteLinks, vscodeSessionLink } from "../src/bridge/session-links.js";
 import { foldRecorded } from "./support/oracle.js";
 
 const KNOWN: Record<string, string> = {
   hydra_session_TOh6XWtvXLQwMgVV: "agent-host-session://claude-personal/hydra_session_TOh6XWtvXLQwMgVV",
 };
 const resolve = (id: string): string | undefined => KNOWN[id];
+const linkers = { session: resolve };
 const FORK = "\nForked to [`TOh6XWtvXLQwMgVV`](hydra://sessions/TOh6XWtvXLQwMgVV).\n";
 const ID = "hydra_session_TOh6XWtvXLQwMgVV";
 const LINK = KNOWN[ID]!;
@@ -20,34 +21,37 @@ describe("session links", () => {
   });
 
   it("rewrites a link target, a full id, a host and a turn anchor, and leaves unknown sessions alone", () => {
-    expect(rewriteSessionLinks(FORK, resolve)).toBe(REWRITTEN);
-    expect(rewriteSessionLinks("[x](hydra://sessions/hydra_session_TOh6XWtvXLQwMgVV)", resolve)).toBe(
+    expect(rewriteLinks(FORK, linkers)).toBe(REWRITTEN);
+    expect(rewriteLinks("[x](hydra://sessions/hydra_session_TOh6XWtvXLQwMgVV)", linkers)).toBe(
       "[x](agent-host-session://claude-personal/hydra_session_TOh6XWtvXLQwMgVV)",
     );
-    expect(rewriteSessionLinks("[x](hydra://box:8080/sessions/TOh6XWtvXLQwMgVV#turn-3)", resolve)).toBe(
+    expect(rewriteLinks("[x](hydra://box:8080/sessions/TOh6XWtvXLQwMgVV#turn-3)", linkers)).toBe(
       "[x](agent-host-session://claude-personal/hydra_session_TOh6XWtvXLQwMgVV)",
     );
-    expect(rewriteSessionLinks("[x](hydra://sessions/unknownSession1)", resolve)).toBe("[x](hydra://sessions/unknownSession1)");
+    expect(rewriteLinks("[x](hydra://sessions/unknownSession1)", linkers)).toBe("[x](hydra://sessions/unknownSession1)");
   });
 
   it("makes a bare link a markdown link named for the session", () => {
-    expect(rewriteSessionLinks("see hydra://sessions/TOh6XWtvXLQwMgVV now", resolve)).toBe(
+    expect(rewriteLinks("see hydra://sessions/TOh6XWtvXLQwMgVV now", linkers)).toBe(
       "see [TOh6XWtvXLQwMgVV](agent-host-session://claude-personal/hydra_session_TOh6XWtvXLQwMgVV) now",
     );
   });
 
   it("holds back only what could still become a link", () => {
-    expect(holdFrom("plain text")).toBe(10);
+    expect(holdFrom("plain text ")).toBe(11);
+    expect(holdFrom("plain text")).toBe(6);
+    expect(holdFrom("plain text", false)).toBe(10);
+    expect(holdFrom("see `hydra_ses", false)).toBe(4);
     expect(holdFrom("see hyd")).toBe(4);
     expect(holdFrom("see (hydra://sessions/TOh6")).toBe(5);
     expect(holdFrom("see (hydra://sessions/TOh6XWtvXLQwMgVV)")).toBe(39);
-    expect(holdFrom(`hydra://${"x".repeat(400)}`)).toBe(408);
+    expect(holdFrom(`hydra://${"x".repeat(600)}`)).toBe(608);
   });
 
   it("links a full session id, bare or in backticks, and leaves unknown ids alone", () => {
-    expect(rewriteSessionLinks("ran in hydra_session_TOh6XWtvXLQwMgVV.", resolve)).toBe(`ran in [${ID}](${LINK}).`);
-    expect(rewriteSessionLinks("ran in `hydra_session_TOh6XWtvXLQwMgVV`.", resolve)).toBe(`ran in [\`${ID}\`](${LINK}).`);
-    expect(rewriteSessionLinks("ran in hydra_session_unknownSessionA.", resolve)).toBe("ran in hydra_session_unknownSessionA.");
+    expect(rewriteLinks("ran in hydra_session_TOh6XWtvXLQwMgVV.", linkers)).toBe(`ran in [${ID}](${LINK}).`);
+    expect(rewriteLinks("ran in `hydra_session_TOh6XWtvXLQwMgVV`.", linkers)).toBe(`ran in [\`${ID}\`](${LINK}).`);
+    expect(rewriteLinks("ran in hydra_session_unknownSessionA.", linkers)).toBe("ran in hydra_session_unknownSessionA.");
   });
 
   it("leaves an id in code, in a link or in a longer token as written", () => {
@@ -63,19 +67,19 @@ describe("session links", () => {
       "hydra_session_TOh6XWtvXLQwMgVV.jsonl",
     ];
     for (const text of untouched) {
-      expect(rewriteSessionLinks(text, resolve)).toBe(text);
+      expect(rewriteLinks(text, linkers)).toBe(text);
     }
-    expect(rewriteSessionLinks("```\ncode\n```\nthen hydra_session_TOh6XWtvXLQwMgVV", resolve)).toBe(`\`\`\`\ncode\n\`\`\`\nthen [${ID}](${LINK})`);
+    expect(rewriteLinks("```\ncode\n```\nthen hydra_session_TOh6XWtvXLQwMgVV", linkers)).toBe(`\`\`\`\ncode\n\`\`\`\nthen [${ID}](${LINK})`);
   });
 
   it("rewrites links and ids however the stream splits them", () => {
     const text = `${FORK}See \`hydra_session_TOh6XWtvXLQwMgVV\` and hydra_session_TOh6XWtvXLQwMgVV\n\`\`\`\nhydra_session_TOh6XWtvXLQwMgVV\n\`\`\`\nhydra_session_TOh6XWtvXLQwMgVV`;
-    const expected = rewriteSessionLinks(text, resolve);
+    const expected = rewriteLinks(text, linkers);
     expect(expected).toBe(
       `${REWRITTEN}See [\`${ID}\`](${LINK}) and [${ID}](${LINK})\n\`\`\`\n${ID}\n\`\`\`\n[${ID}](${LINK})`,
     );
     for (let size = 1; size <= text.length; size += 1) {
-      const stream = new LinkStream(resolve);
+      const stream = new LinkStream(linkers);
       let out = "";
       for (let at = 0; at < text.length; at += size) {
         out += stream.push(text.slice(at, at + size));

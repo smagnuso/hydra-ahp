@@ -13,6 +13,7 @@ import {
 import { editContentUri } from "./edit-content.js";
 import { cwdToUri } from "./ids.js";
 import { patchedFiles } from "./patch.js";
+import type { FileLinks } from "./file-links.js";
 import { LinkStream, type SessionLinkResolver } from "./session-links.js";
 
 export interface Frame {
@@ -29,6 +30,8 @@ export interface MapperOptions {
   sourceOf?: (hydraId: string) => { session: string; chat: string } | undefined;
   // The link a client follows to another Hydra session, for rewriting the hydra:// links in text; undefined when it is not listed.
   sessionLink?: SessionLinkResolver;
+  // Links for the files message text names, against the session's cwd on this machine.
+  fileLinks?: FileLinks;
 }
 
 const MAX_OUTPUT_CHARS = 20_000;
@@ -589,16 +592,31 @@ export class ChatMapper {
     return actions;
   }
 
-  // Message text passes through a LinkStream per part, so a hydra:// link or session id split across chunks is rewritten whole.
+  // Message text passes through a LinkStream per part, so a link, session id or file name split across chunks is rewritten whole.
   private linked(turnId: string, partId: string, body: string): string {
-    const resolve = this.options.sessionLink;
-    if (!resolve) {
+    const { sessionLink, fileLinks } = this.options;
+    if (!sessionLink && !fileLinks) {
       return body;
     }
     if (this.links?.partId !== partId) {
-      this.links = { turnId, partId, stream: new LinkStream(resolve) };
+      this.links = {
+        turnId,
+        partId,
+        stream: new LinkStream({ ...(sessionLink ? { session: sessionLink } : {}), ...(fileLinks ? { files: fileLinks } : {}) }),
+      };
     }
     return this.links.stream.push(body);
+  }
+
+  get holding(): boolean {
+    return this.links?.stream.holding ?? false;
+  }
+
+  // Lets out text held back as a possible link when the agent pauses; the part stays open for more.
+  releaseHeld(): Json[] {
+    const links = this.links;
+    const rest = links?.stream.flush();
+    return links && rest ? [{ type: "chat/delta", turnId: links.turnId, partId: links.partId, content: rest }] : NO_ACTIONS;
   }
 
   // Lets out text held back as a possible link once the part it belongs to can get no more.

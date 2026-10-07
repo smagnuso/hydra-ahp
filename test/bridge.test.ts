@@ -290,7 +290,11 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
         stamped({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "dup of history" } }, maxSeq),
       ];
     });
-    const { chat } = await open(harness, version);
+    const { session, oracle } = await open(harness, version);
+    // "partial" could still grow into a file name, so it is held until the agent pauses.
+    await sleep(300);
+    settle(session, oracle);
+    const chat = oracle.state(CHAT) as ChatState;
     expect(chat.turns).toHaveLength(4);
     expect(chat.turns.map((turn) => turn.id)).not.toContain("racing");
     expect(chat.activeTurn).toMatchObject({ id: "racing", responseParts: [{ kind: "markdown", content: "partial" }] });
