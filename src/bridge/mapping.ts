@@ -589,7 +589,7 @@ export class ChatMapper {
     return actions;
   }
 
-  // Message text passes through a LinkStream per part, so a hydra:// link split across chunks is rewritten whole.
+  // Message text passes through a LinkStream per part, so a hydra:// link or session id split across chunks is rewritten whole.
   private linked(turnId: string, partId: string, body: string): string {
     const resolve = this.options.sessionLink;
     if (!resolve) {

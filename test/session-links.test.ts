@@ -8,7 +8,9 @@ const KNOWN: Record<string, string> = {
 };
 const resolve = (id: string): string | undefined => KNOWN[id];
 const FORK = "\nForked to [`TOh6XWtvXLQwMgVV`](hydra://sessions/TOh6XWtvXLQwMgVV).\n";
-const REWRITTEN = "\nForked to [`TOh6XWtvXLQwMgVV`](agent-host-session://claude-personal/hydra_session_TOh6XWtvXLQwMgVV).\n";
+const ID = "hydra_session_TOh6XWtvXLQwMgVV";
+const LINK = KNOWN[ID]!;
+const REWRITTEN ="\nForked to [`TOh6XWtvXLQwMgVV`](agent-host-session://claude-personal/hydra_session_TOh6XWtvXLQwMgVV).\n";
 
 describe("session links", () => {
   it("builds VS Code's link from a session's AHP URI", () => {
@@ -42,15 +44,44 @@ describe("session links", () => {
     expect(holdFrom(`hydra://${"x".repeat(400)}`)).toBe(408);
   });
 
-  it("rewrites a link however the stream splits it", () => {
-    for (let size = 1; size <= FORK.length; size += 1) {
+  it("links a full session id, bare or in backticks, and leaves unknown ids alone", () => {
+    expect(rewriteSessionLinks("ran in hydra_session_TOh6XWtvXLQwMgVV.", resolve)).toBe(`ran in [${ID}](${LINK}).`);
+    expect(rewriteSessionLinks("ran in `hydra_session_TOh6XWtvXLQwMgVV`.", resolve)).toBe(`ran in [\`${ID}\`](${LINK}).`);
+    expect(rewriteSessionLinks("ran in hydra_session_unknownSessionA.", resolve)).toBe("ran in hydra_session_unknownSessionA.");
+  });
+
+  it("leaves an id in code, in a link or in a longer token as written", () => {
+    const untouched = [
+      "```\nhydra_session_TOh6XWtvXLQwMgVV\n```",
+      "~~~sh\nhydra-acp attach hydra_session_TOh6XWtvXLQwMgVV\n~~~",
+      "`hydra-acp attach hydra_session_TOh6XWtvXLQwMgVV`",
+      `[hydra_session_TOh6XWtvXLQwMgVV](${LINK})`,
+      "[see](hydra_session_TOh6XWtvXLQwMgVV)",
+      "peer:hydra_session_TOh6XWtvXLQwMgVV",
+      "xhydra_session_TOh6XWtvXLQwMgVV",
+      "hydra_session_TOh6XWtvXLQwMgVVx",
+      "hydra_session_TOh6XWtvXLQwMgVV.jsonl",
+    ];
+    for (const text of untouched) {
+      expect(rewriteSessionLinks(text, resolve)).toBe(text);
+    }
+    expect(rewriteSessionLinks("```\ncode\n```\nthen hydra_session_TOh6XWtvXLQwMgVV", resolve)).toBe(`\`\`\`\ncode\n\`\`\`\nthen [${ID}](${LINK})`);
+  });
+
+  it("rewrites links and ids however the stream splits them", () => {
+    const text = `${FORK}See \`hydra_session_TOh6XWtvXLQwMgVV\` and hydra_session_TOh6XWtvXLQwMgVV\n\`\`\`\nhydra_session_TOh6XWtvXLQwMgVV\n\`\`\`\nhydra_session_TOh6XWtvXLQwMgVV`;
+    const expected = rewriteSessionLinks(text, resolve);
+    expect(expected).toBe(
+      `${REWRITTEN}See [\`${ID}\`](${LINK}) and [${ID}](${LINK})\n\`\`\`\n${ID}\n\`\`\`\n[${ID}](${LINK})`,
+    );
+    for (let size = 1; size <= text.length; size += 1) {
       const stream = new LinkStream(resolve);
       let out = "";
-      for (let at = 0; at < FORK.length; at += size) {
-        out += stream.push(FORK.slice(at, at + size));
+      for (let at = 0; at < text.length; at += size) {
+        out += stream.push(text.slice(at, at + size));
       }
       out += stream.flush();
-      expect(out).toBe(REWRITTEN);
+      expect(out, `chunks of ${size}`).toBe(expected);
     }
   });
 });
