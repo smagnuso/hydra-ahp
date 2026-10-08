@@ -2,7 +2,8 @@
 import { readFileSync } from "node:fs";
 import { startApp } from "./app.js";
 import { isWildcardHost, runTokenCommand, WILDCARD_WARNING } from "./commands/tokens.js";
-import { DEFAULT_PORT, loadConfig, tokensPath } from "./config.js";
+import { DEFAULT_PORT, endpointPath, loadConfig, tokensPath } from "./config.js";
+import { readEndpoint } from "./store/endpoint.js";
 import { TokenRegistry } from "./store/tokens.js";
 import { logger } from "./util/log.js";
 
@@ -12,14 +13,17 @@ const { version: VERSION } = JSON.parse(readFileSync(new URL("../package.json", 
 
 function runCli(argv: string[]): void {
   const tokens = new TokenRegistry({ path: tokensPath(process.env) });
+  const recorded = readEndpoint(endpointPath(process.env));
   const port = process.env.HYDRA_AHP_PORT ?? String(DEFAULT_PORT);
-  // Outside the daemon only the env is known; settings adopted from the daemon show up in `/hydra ahp token`.
+  // Without a running extension only the env is known.
   const host = process.env.HYDRA_AHP_PREFERRED_HOST || process.env.HYDRA_AHP_HOST || "127.0.0.1";
-  const scheme = process.env.HYDRA_AHP_TLS_CERT && process.env.HYDRA_AHP_TLS_KEY ? "wss" : "ws";
-  if (isWildcardHost(process.env.HYDRA_AHP_HOST ?? "") && ["mint", "url"].includes(argv[0] ?? "")) {
+  const address = recorded?.address ?? `${host}:${port}`;
+  const scheme = recorded?.scheme ?? (process.env.HYDRA_AHP_TLS_CERT && process.env.HYDRA_AHP_TLS_KEY ? "wss" : "ws");
+  const wildcard = recorded?.wildcard ?? isWildcardHost(process.env.HYDRA_AHP_HOST ?? "");
+  if (wildcard && ["mint", "url"].includes(argv[0] ?? "")) {
     process.stderr.write(`${WILDCARD_WARNING}\n`);
   }
-  process.stdout.write(`${runTokenCommand({ tokens, address: () => `${host}:${port}`, scheme: () => scheme }, argv.join(" "))}\n`);
+  process.stdout.write(`${runTokenCommand({ tokens, address: () => address, scheme: () => scheme }, argv.join(" "))}\n`);
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {

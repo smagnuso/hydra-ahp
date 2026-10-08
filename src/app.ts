@@ -6,6 +6,7 @@ import { AhpListener } from "./server/listener.js";
 import { ChangesetService } from "./changesets/service.js";
 import { FlagStore } from "./store/flags.js";
 import { TerminalService } from "./terminals/service.js";
+import { removeEndpoint, writeEndpoint } from "./store/endpoint.js";
 import { ConfigStore } from "./store/configs.js";
 import { ModelStore } from "./store/models.js";
 import { TokenRegistry } from "./store/tokens.js";
@@ -119,6 +120,7 @@ export async function startApp(initial: Config, version: string): Promise<App> {
   }
   const scheme = config.tls ? "wss" : "ws";
   const address = (): string => connectAddress(config, port);
+  writeEndpoint(config.endpointPath, { address: address(), scheme, wildcard: isWildcardHost(config.host) });
 
   // The bridge advertises no fs capability; refuse any agent file request that arrives anyway.
   for (const method of ["fs/read_text_file", "fs/write_text_file"]) {
@@ -147,6 +149,7 @@ export async function startApp(initial: Config, version: string): Promise<App> {
     async stop() {
       stopping = true;
       clearInterval(refreshTimer);
+      removeEndpoint(config.endpointPath);
       await listener.close();
       await backend.stop();
       client.close();
