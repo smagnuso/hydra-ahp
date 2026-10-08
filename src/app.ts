@@ -1,7 +1,7 @@
 import { ProtocolCore } from "./protocol/core.js";
 import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { applyDaemonListen, certExpiryNotice, fetchDaemonListen, shadowedCertNotice } from "./hydra/daemon-listen.js";
+import { applyDaemonListen, certExpiryNotice, certNames, fetchDaemonListen, isLoopbackHost, pickDisplayName, shadowedCertNotice } from "./hydra/daemon-listen.js";
 import { AhpListener } from "./server/listener.js";
 import { ChangesetService } from "./changesets/service.js";
 import { FlagStore } from "./store/flags.js";
@@ -43,9 +43,10 @@ export async function discoverHydraVersion(rest: HydraRest): Promise<string | un
   }
 }
 
-export function connectAddress(config: Config, port: number): string {
-  const wildcard = config.host === "0.0.0.0" || config.host === "::";
-  const host = config.preferredHost ?? (wildcard ? hostname() : config.host);
+export function connectAddress(config: Config, port: number, certDnsNames: readonly string[] = []): string {
+  const wildcard = isWildcardHost(config.host);
+  const certName = isLoopbackHost(config.host) ? undefined : pickDisplayName(certDnsNames, hostname());
+  const host = config.preferredHost ?? certName ?? (wildcard ? hostname() : config.host);
   return `${host.includes(":") ? `[${host}]` : host}:${port}`;
 }
 
@@ -106,12 +107,13 @@ export async function startApp(initial: Config, version: string): Promise<App> {
   const core = new ProtocolCore({ backend, detachGraceMs: DETACH_GRACE_MS });
   await core.start();
 
+  const names = config.tls ? certNames(config.tls.cert) : { dns: [], ips: [] };
   const listener = new AhpListener({
     core,
     tokens,
     port: config.port,
     host: config.host,
-    allowedHosts: [...config.allowedHosts, ...(config.preferredHost ? [config.preferredHost] : [])],
+    allowedHosts: [...config.allowedHosts, ...(config.preferredHost ? [config.preferredHost] : []), ...names.dns, ...names.ips, "localhost", "127.0.0.1", "::1"],
     ...(config.tls ? { tls: { cert: readFileSync(config.tls.cert), key: readFileSync(config.tls.key) } } : {}),
   });
   const port = await listener.listen();
@@ -119,7 +121,7 @@ export async function startApp(initial: Config, version: string): Promise<App> {
     log.warn(WILDCARD_WARNING);
   }
   const scheme = config.tls ? "wss" : "ws";
-  const address = (): string => connectAddress(config, port);
+  const address = (): string => connectAddress(config, port, names.dns);
   writeEndpoint(config.endpointPath, { address: address(), scheme, wildcard: isWildcardHost(config.host) });
 
   // The bridge advertises no fs capability; refuse any agent file request that arrives anyway.

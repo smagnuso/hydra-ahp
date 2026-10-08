@@ -18,7 +18,7 @@ export interface TokenCommandContext {
 }
 
 export const WILDCARD_WARNING =
-  "Bound to all interfaces: a token gives shell-equivalent access to anyone who can reach this port. `hydra-acp daemon listen tailnet` limits it to your tailnet.";
+  "Bound to all interfaces: a token gives shell-equivalent access to anyone who can reach this port. `hydra-acp daemon listen local` (or a narrower scope) limits it.";
 
 export function isWildcardHost(host: string): boolean {
   return host === "0.0.0.0" || host === "::";

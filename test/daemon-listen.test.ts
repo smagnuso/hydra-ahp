@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
-import { applyDaemonListen } from "../src/hydra/daemon-listen.js";
+import { applyDaemonListen, pickDisplayName } from "../src/hydra/daemon-listen.js";
 import { hostName } from "../src/server/listener.js";
 
 const base = { HYDRA_ACP_TOKEN: "t" };
@@ -53,5 +53,16 @@ describe("hostName", () => {
     expect(hostName("[fd7a::1]:55590")).toBe("fd7a::1");
     expect(hostName("100.64.0.1")).toBe("100.64.0.1");
     expect(hostName(undefined)).toBeUndefined();
+  });
+});
+
+describe("pickDisplayName", () => {
+  it("prefers the cert name that extends this machine's hostname", () => {
+    expect(pickDisplayName(["other.example", "blackbox.ts.net"], "blackbox")).toBe("blackbox.ts.net");
+  });
+
+  it("falls back to the first concrete name and skips wildcards", () => {
+    expect(pickDisplayName(["*.example.com", "a.example.com"], "blackbox")).toBe("a.example.com");
+    expect(pickDisplayName([], "blackbox")).toBeUndefined();
   });
 });
