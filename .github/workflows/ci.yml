@@ -27,6 +27,27 @@ jobs:
         with:
           repository: smagnuso/hydra-acp
           path: hydra-cli
+      # The daemon checkout floats on Hydra's master, so a red run needs the pair of
+      # revisions to be attributable: an ahp bug, a daemon bug, and a daemon fix that
+      # is committed but not yet pushed all look the same without it.
+      - name: Record the revisions under test
+        shell: bash
+        run: |
+          daemon=$(git -C hydra-cli rev-parse HEAD)
+          subject=$(git -C hydra-cli log -1 --pretty=%s)
+          committed=$(git -C hydra-cli log -1 --date=iso-strict --pretty=%cd)
+          {
+            echo "ahp    ${{ github.sha }}"
+            echo "daemon $daemon ($committed) $subject"
+          } | tee revisions.txt
+          {
+            echo "| | revision | |"
+            echo "| --- | --- | --- |"
+            echo "| ahp | \`${{ github.sha }}\` | |"
+            echo "| daemon | \`$daemon\` | $committed — $subject |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p test-logs
+          mv revisions.txt test-logs/revisions.txt
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}

@@ -30,6 +30,26 @@ jobs:
         with:
           repository: smagnuso/hydra-acp
           path: hydra-cli
+      # See ci.yml: the daemon checkout floats, so a failing round has to name the
+      # daemon it ran against.
+      - name: Record the revisions under test
+        shell: bash
+        run: |
+          daemon=$(git -C hydra-cli rev-parse HEAD)
+          subject=$(git -C hydra-cli log -1 --pretty=%s)
+          committed=$(git -C hydra-cli log -1 --date=iso-strict --pretty=%cd)
+          {
+            echo "ahp    ${{ github.sha }}"
+            echo "daemon $daemon ($committed) $subject"
+          } | tee revisions.txt
+          {
+            echo "| | revision | |"
+            echo "| --- | --- | --- |"
+            echo "| ahp | \`${{ github.sha }}\` | |"
+            echo "| daemon | \`$daemon\` | $committed — $subject |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p stress
+          mv revisions.txt stress/revisions.txt
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
