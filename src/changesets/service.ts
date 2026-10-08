@@ -11,7 +11,7 @@ const log = logger("changesets");
 type ChangesetId = "session" | "uncommitted";
 
 const SEGMENT = "/changeset/";
-const AT_SEGMENT = "/at/";
+const REV_SCHEME = "ahp-rev:";
 const CHANGESET_URI = /\/changeset\/(session|uncommitted)$/;
 const REVISION = /^(HEAD|[0-9a-f]{40}|[0-9a-f]{64})$/;
 const POLL_MS = 2_000;
@@ -124,16 +124,17 @@ export class ChangesetService {
   }
 
   ownsContent(uri: unknown): uri is string {
-    return typeof uri === "string" && uri.includes(SEGMENT) && uri.includes(AT_SEGMENT);
+    return typeof uri === "string" && uri.startsWith(REV_SCHEME);
   }
 
   // A changed file's content at a revision; only plain paths inside the repository's tree are reachable through git show.
   async read(uri: string, encoding: unknown): Promise<unknown> {
-    const at = uri.indexOf(AT_SEGMENT);
-    const changeset = uri.slice(0, at);
+    const query = revisionQuery(uri);
+    const changeset = query.get("changeset") ?? "";
+    const rev = query.get("rev");
+    const segments = (query.get("file") ?? "").split("/");
     const match = CHANGESET_URI.exec(changeset);
-    const [rev, ...segments] = uri.slice(at + AT_SEGMENT.length).split("/").map((segment) => decodeURIComponent(segment));
-    if (!match || !rev || !REVISION.test(rev) || segments.length === 0 || segments.some(unsafeSegment)) {
+    if (!match || !rev || !REVISION.test(rev) || segments.some((segment) => !segment) || segments.some(unsafeSegment)) {
       throw new RpcError(ErrorCodes.InvalidParams, "invalid changeset content uri");
     }
     const cwd = this.options.cwdOf(changeset.slice(0, match.index));
@@ -259,9 +260,29 @@ function totalsOf(files: ChangesetFile[]): { additions: number; deletions: numbe
   return { additions, deletions, files: files.length };
 }
 
+// VS Code labels a diff side by its content URI's path, so that is the file's own path; what git needs rides in the query.
+function revisionUri(fileUri: string, changesetUri: string, rev: string, path: string): string {
+  const query = new URLSearchParams({ changeset: changesetUri, rev, file: path });
+  return `${REV_SCHEME}${new URL(fileUri).pathname}?${query.toString()}`;
+}
+
+// VS Code hands the query back percent-encoded as a whole, '=' and '&' included.
+function revisionQuery(uri: string): URLSearchParams {
+  const raw = uri.slice(uri.indexOf("?") + 1);
+  const query = new URLSearchParams(raw);
+  if (query.has("changeset")) {
+    return query;
+  }
+  try {
+    return new URLSearchParams(decodeURIComponent(raw));
+  } catch {
+    return query;
+  }
+}
+
 function toChangesetFile(changesetUri: string, root: string, rev: string, file: ChangedFile): ChangesetFile {
   const fileUri = cwdToUri(join(root, file.path));
-  const beforeUri = `${changesetUri}${AT_SEGMENT}${rev}/${file.path.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`;
+  const beforeUri = revisionUri(fileUri, changesetUri, rev, file.path);
   const counts = { ...(file.added !== undefined ? { added: file.added } : {}), ...(file.removed !== undefined ? { removed: file.removed } : {}) };
   return {
     id: fileUri,

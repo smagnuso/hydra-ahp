@@ -87,7 +87,10 @@ describe("uncommitted changes", () => {
 
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: edit?.before?.content.uri } as never)) as unknown as { data: string };
     expect(before.data).toBe("one\ntwo\n");
-    await expect(session.client.request("resourceRead", { channel: "ahp-root://", uri: `${CHANGESET}/at/HEAD/..%2F..%2Fetc%2Fpasswd` } as never)).rejects.toBeDefined();
+    const encoded = encodeURIComponent(new URLSearchParams({ changeset: CHANGESET, rev: "HEAD", file: "kept.txt" }).toString());
+    const reencoded = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: `ahp-rev:/kept.txt?${encoded}` } as never)) as unknown as { data: string };
+    expect(reencoded.data).toBe("one\ntwo\n");
+    await expect(session.client.request("resourceRead", { channel: "ahp-root://", uri: `ahp-rev:/etc/passwd?${new URLSearchParams({ changeset: CHANGESET, rev: "HEAD", file: "../../etc/passwd" })}` } as never)).rejects.toBeDefined();
 
     execFileSync("git", ["checkout", "--", "kept.txt"], { cwd });
     await session.waitFor((envelope) => envelope.channel === CHANGESET && (envelope.action as { type: string }).type === "changeset/fileRemoved", 3000);
