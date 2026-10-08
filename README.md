@@ -245,6 +245,12 @@ Set these in the `env` block of the extension's entry in
 "hydra-ahp": { "env": { "HYDRA_AHP_LOG_LEVEL": "debug" } }
 ```
 
+The same keys can go in `~/.hydra-acp/extensions/ahp/ahp.conf` (`KEY=value`
+lines); the process env wins over it, and a plain `extension restart` picks the
+file up. `hydra ahp tailscale setup` writes it for you: it mints a Tailscale
+cert into `extensions/ahp/tls/`, binds the tailnet IP, names the MagicDNS host,
+and offers to restart the extension. Re-run it within ~90 days to renew.
+
 | Key | Default | Notes |
 |---|---|---|
 | `HYDRA_AHP_PORT` | `55590` | Port the listener binds. |

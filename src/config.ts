@@ -95,6 +95,10 @@ export function configsPath(env: NodeJS.ProcessEnv): string {
   return join(hydraHome(env), "extensions", "ahp", "configs.json");
 }
 
+export function confPath(env: NodeJS.ProcessEnv): string {
+  return join(hydraHome(env), "extensions", "ahp", "ahp.conf");
+}
+
 export function endpointPath(env: NodeJS.ProcessEnv): string {
   return join(hydraHome(env), "extensions", "ahp", "endpoint.json");
 }
