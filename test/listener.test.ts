@@ -77,11 +77,11 @@ describe("listener auth", () => {
     expect(harness.backend.detached).toEqual([chatUri("s1-chat")]);
   });
 
-  it("only listens on loopback", () => {
+  it("refuses a non-loopback host without a keypair", () => {
     const backend = new FakeBackend();
     const core = new ProtocolCore({ backend });
     const tokens = new TokenRegistry({ path: join(mkdtempSync(join(tmpdir(), "ahp-l-")), "t.json") });
-    expect(() => new AhpListener({ core, tokens, host: "0.0.0.0" })).toThrow("non-loopback");
+    expect(() => new AhpListener({ core, tokens, host: "0.0.0.0" })).toThrow("without a TLS cert and key");
   });
 });
 

@@ -74,3 +74,17 @@ describe("token verbs", () => {
     expect(run("list")).toContain("No tokens");
   });
 });
+
+describe("token commands on a remote bind", () => {
+  it("uses wss and appends the warning to mint and url", () => {
+    const tokens = new TokenRegistry({ path: join(mkdtempSync(join(tmpdir(), "ahp-t-")), "tokens.json") });
+    const context = { tokens, address: () => "box.ts.net:55590", scheme: () => "wss" as const, warning: "WARN" };
+    const mint = runTokenCommand(context, "mint laptop");
+    expect(mint).toContain('"address": "wss://box.ts.net:55590"');
+    expect(mint).toContain("wss://box.ts.net:55590?tkn=");
+    expect(mint.endsWith("WARN")).toBe(true);
+    const url = runTokenCommand(context, "url");
+    expect(url.startsWith("wss://box.ts.net:55590?tkn=")).toBe(true);
+    expect(url.endsWith("WARN")).toBe(true);
+  });
+});

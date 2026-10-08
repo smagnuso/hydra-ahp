@@ -13,6 +13,19 @@ const USAGE = `usage: token mint <label> [--files ${FILE_LEVELS.join("|")}] | to
 export interface TokenCommandContext {
   tokens: TokenRegistry;
   address: () => string;
+  scheme?: () => "ws" | "wss";
+  warning?: string;
+}
+
+export const WILDCARD_WARNING =
+  "Bound to all interfaces: a token gives shell-equivalent access to anyone who can reach this port. `hydra-acp daemon listen tailnet` limits it to your tailnet.";
+
+export function isWildcardHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::";
+}
+
+function withWarning(context: TokenCommandContext, text: string): string {
+  return context.warning ? `${text}\n\n${context.warning}` : text;
 }
 
 function parseMint(words: string[], defaultLabel?: string): { label: string; level: FileLevel } | string {
@@ -46,8 +59,8 @@ function parseMint(words: string[], defaultLabel?: string): { label: string; lev
 }
 
 // The URL form carries the token as ?tkn=, like VS Code's transport.
-function connectUrl(address: string, token: string): string {
-  return `ws://${address}?tkn=${encodeURIComponent(token)}`;
+function connectUrl(address: string, token: string, scheme: string): string {
+  return `${scheme}://${address}?tkn=${encodeURIComponent(token)}`;
 }
 
 // Runs one "token ..." invocation and returns the reply text.
@@ -61,15 +74,16 @@ export function runTokenCommand(context: TokenCommandContext, args: string): str
         return parsed;
       }
       const { token, info } = context.tokens.mint(parsed.label, parsed.level);
-      const entry = { address: context.address(), name: parsed.label, connectionToken: token };
-      return [
+      const scheme = context.scheme?.() ?? "ws";
+      const entry = { address: scheme === "wss" ? `wss://${context.address()}` : context.address(), name: parsed.label, connectionToken: token };
+      return withWarning(context, [
         `Minted token ${info.id} (${info.label}, files: ${info.level}). It is shown once. Add this to chat.remoteAgentHosts in VS Code and enable chat.remoteAgentHostsEnabled:`,
         "",
         JSON.stringify(entry, null, 2),
         "",
         "Or, as a URL for any AHP client:",
-        connectUrl(entry.address, token),
-      ].join("\n");
+        connectUrl(context.address(), token, scheme),
+      ].join("\n"));
     }
     case "url": {
       const parsed = parseMint(words, "url");
@@ -77,7 +91,7 @@ export function runTokenCommand(context: TokenCommandContext, args: string): str
         return parsed;
       }
       const { token } = context.tokens.mint(parsed.label, parsed.level);
-      return connectUrl(context.address(), token);
+      return withWarning(context, connectUrl(context.address(), token, context.scheme?.() ?? "ws"));
     }
     case "list": {
       const rows = context.tokens.list();

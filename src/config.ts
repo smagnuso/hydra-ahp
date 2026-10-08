@@ -3,12 +3,22 @@ import { homedir } from "node:os";
 
 export const DEFAULT_PORT = 55590;
 
+export interface TlsConfig {
+  cert: string;
+  key: string;
+}
+
 export interface Config {
   daemonUrl: string;
   wsUrl: string;
   token: string;
   home: string;
+  host: string;
+  hostExplicit: boolean;
   port: number;
+  tls: TlsConfig | undefined;
+  preferredHost: string | undefined;
+  allowedHosts: string[];
   idleMs: number | undefined;
   pollMs: number | undefined;
   warmPollMs: number | undefined;
@@ -32,6 +42,22 @@ function numberFrom(env: NodeJS.ProcessEnv, key: string): number | undefined {
     throw new Error(`${key} must be a non-negative number, got ${raw}`);
   }
   return value;
+}
+
+function expandHome(path: string): string {
+  return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
+}
+
+function tlsFrom(env: NodeJS.ProcessEnv): TlsConfig | undefined {
+  const cert = env.HYDRA_AHP_TLS_CERT;
+  const key = env.HYDRA_AHP_TLS_KEY;
+  if (cert && key) {
+    return { cert: expandHome(cert), key: expandHome(key) };
+  }
+  if (cert || key) {
+    throw new Error("HYDRA_AHP_TLS_CERT and HYDRA_AHP_TLS_KEY must both be set or both omitted");
+  }
+  return undefined;
 }
 
 function booleanFrom(env: NodeJS.ProcessEnv, key: string, fallback: boolean): boolean {
@@ -94,7 +120,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     wsUrl,
     token,
     home: hydraHome(env),
+    host: env.HYDRA_AHP_HOST || "127.0.0.1",
+    hostExplicit: Boolean(env.HYDRA_AHP_HOST),
     port: numberFrom(env, "HYDRA_AHP_PORT") ?? DEFAULT_PORT,
+    tls: tlsFrom(env),
+    preferredHost: env.HYDRA_AHP_PREFERRED_HOST || undefined,
+    allowedHosts: (env.HYDRA_AHP_ALLOWED_HOSTS ?? "").split(",").map((entry) => entry.trim()).filter((entry) => entry !== ""),
     idleMs: idleDays === undefined ? undefined : idleDays * 24 * 60 * 60 * 1000,
     pollMs: numberFrom(env, "HYDRA_AHP_POLL_MS"),
     warmPollMs: numberFrom(env, "HYDRA_AHP_WARM_POLL_MS"),

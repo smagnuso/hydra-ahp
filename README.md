@@ -247,7 +247,11 @@ Set these in the `env` block of the extension's entry in
 
 | Key | Default | Notes |
 |---|---|---|
-| `HYDRA_AHP_PORT` | `55590` | Loopback port the listener binds. |
+| `HYDRA_AHP_PORT` | `55590` | Port the listener binds. |
+| `HYDRA_AHP_HOST` | `127.0.0.1` | Bind address. Anything but loopback needs a TLS cert and key. When unset, the daemon's host is adopted along with its cert (see below). |
+| `HYDRA_AHP_TLS_CERT`, `HYDRA_AHP_TLS_KEY` | daemon's | PEM paths; set both or neither. Explicit values win over the daemon's. |
+| `HYDRA_AHP_PREFERRED_HOST` | daemon's `publicHost` | Name shown in `token mint` and `token url`, and accepted in the Host header. |
+| `HYDRA_AHP_ALLOWED_HOSTS` | none | Extra Host header names accepted on a non-loopback bind (comma separated). |
 | `HYDRA_AHP_TOKEN_IDLE_DAYS` | `90` | Days unused before a token expires. |
 | `HYDRA_AHP_DIR_ROOTS` | home directory | Roots the new-session folder picker may browse (path-delimiter separated). |
 | `HYDRA_AHP_PERMISSION_DELAY_MS` | `500` | How long a new permission request is held before clients see it; `0` shows them at once. |
@@ -256,8 +260,16 @@ Set these in the `env` block of the extension's entry in
 
 ## Security
 
-- **Loopback only.** The listener binds `127.0.0.1`; there is no TLS and no
-  remote access.
+- **Loopback by default; remote needs TLS.** The listener binds `127.0.0.1`
+  and refuses any other host without a cert and key. With no explicit
+  settings it follows `hydra-acp daemon listen` (`tailnet` or `all`): the
+  daemon's cert, host and public name are adopted at startup, the same way
+  the browser extension does. Remote clients use `wss://`. A non-loopback bind
+  also checks the Host header against the bound host, the public name and
+  `HYDRA_AHP_ALLOWED_HOSTS`.
+- **A token is a remote shell.** Any token can prompt an agent and approve its
+  permission requests, whatever its file level. On `0.0.0.0` anyone who can
+  reach the port can attempt a connection; prefer `daemon listen tailnet`.
 - **Own tokens.** Clients authenticate with `?tkn=<token>` (VS Code's browser
   transport cannot send headers) or `Authorization: Bearer <token>`. Tokens
   come from this extension's own registry, stored as hashes; hydra's admin

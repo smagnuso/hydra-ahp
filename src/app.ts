@@ -1,4 +1,7 @@
 import { ProtocolCore } from "./protocol/core.js";
+import { readFileSync } from "node:fs";
+import { hostname } from "node:os";
+import { applyDaemonListen, certExpiryNotice, fetchDaemonListen, shadowedCertNotice } from "./hydra/daemon-listen.js";
 import { AhpListener } from "./server/listener.js";
 import { ChangesetService } from "./changesets/service.js";
 import { FlagStore } from "./store/flags.js";
@@ -9,7 +12,7 @@ import { TokenRegistry } from "./store/tokens.js";
 import { FileService } from "./files/service.js";
 import { Catalog } from "./bridge/catalog.js";
 import { HydraBackend } from "./bridge/hydra-backend.js";
-import { COMMAND_SPEC, COMMAND_VERB, runTokenCommand } from "./commands/tokens.js";
+import { COMMAND_SPEC, COMMAND_VERB, isWildcardHost, runTokenCommand, WILDCARD_WARNING } from "./commands/tokens.js";
 import type { Config } from "./config.js";
 import { HydraClient } from "./hydra/client.js";
 import { ExtensionState } from "./hydra/ext-state.js";
@@ -39,9 +42,25 @@ export async function discoverHydraVersion(rest: HydraRest): Promise<string | un
   }
 }
 
-export async function startApp(config: Config, version: string): Promise<App> {
+export function connectAddress(config: Config, port: number): string {
+  const wildcard = config.host === "0.0.0.0" || config.host === "::";
+  const host = config.preferredHost ?? (wildcard ? hostname() : config.host);
+  return `${host.includes(":") ? `[${host}]` : host}:${port}`;
+}
+
+export async function startApp(initial: Config, version: string): Promise<App> {
+  const rest = new HydraRest(initial.daemonUrl, initial.token);
+  const daemonListen = await fetchDaemonListen(rest);
+  const config = applyDaemonListen(initial, daemonListen);
   setDebug(config.debug);
-  const rest = new HydraRest(config.daemonUrl, config.token);
+  const notice = shadowedCertNotice(config, daemonListen);
+  if (notice) {
+    log.info(notice);
+  }
+  const expiry = config.tls ? certExpiryNotice(config.tls.cert) : undefined;
+  if (expiry) {
+    log.warn(expiry);
+  }
   checkHydraVersion(await discoverHydraVersion(rest));
 
   const client = await HydraClient.connect({
@@ -86,8 +105,20 @@ export async function startApp(config: Config, version: string): Promise<App> {
   const core = new ProtocolCore({ backend, detachGraceMs: DETACH_GRACE_MS });
   await core.start();
 
-  const listener = new AhpListener({ core, tokens, port: config.port });
+  const listener = new AhpListener({
+    core,
+    tokens,
+    port: config.port,
+    host: config.host,
+    allowedHosts: [...config.allowedHosts, ...(config.preferredHost ? [config.preferredHost] : [])],
+    ...(config.tls ? { tls: { cert: readFileSync(config.tls.cert), key: readFileSync(config.tls.key) } } : {}),
+  });
   const port = await listener.listen();
+  if (isWildcardHost(config.host)) {
+    log.warn(WILDCARD_WARNING);
+  }
+  const scheme = config.tls ? "wss" : "ws";
+  const address = (): string => connectAddress(config, port);
 
   // The bridge advertises no fs capability; refuse any agent file request that arrives anyway.
   for (const method of ["fs/read_text_file", "fs/write_text_file"]) {
@@ -101,7 +132,7 @@ export async function startApp(config: Config, version: string): Promise<App> {
     if (params.verb !== COMMAND_VERB) {
       return {};
     }
-    return { text: runTokenCommand({ tokens, address: () => `127.0.0.1:${port}` }, params.args ?? "") };
+    return { text: runTokenCommand({ tokens, address, scheme: () => scheme, ...(isWildcardHost(config.host) ? { warning: WILDCARD_WARNING } : {}) }, params.args ?? "") };
   });
   await client.request("hydra-acp/commands/register", { commands: [COMMAND_SPEC] });
 
@@ -110,7 +141,7 @@ export async function startApp(config: Config, version: string): Promise<App> {
   }, TOKEN_REFRESH_MS);
   refreshTimer.unref();
 
-  log.info(`serving AHP on 127.0.0.1:${port} for Hydra ${config.daemonUrl}`);
+  log.info(`serving AHP on ${scheme}://${config.host}:${port} for Hydra ${config.daemonUrl}`);
   return {
     port,
     async stop() {

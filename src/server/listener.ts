@@ -1,4 +1,5 @@
-import { createServer, type IncomingMessage, type Server } from "node:http";
+import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -19,6 +20,8 @@ export interface ListenerOptions {
   tokens: TokenRegistry;
   port?: number;
   host?: string;
+  tls?: { cert: string | Buffer; key: string | Buffer };
+  allowedHosts?: readonly string[];
   allowedOrigins?: readonly string[];
   maxBadAttempts?: number;
   badAttemptWindowMs?: number;
@@ -44,6 +47,15 @@ export function originAllowed(origin: string | undefined, extra: readonly string
   return /^vscode-[a-z-]+:/i.test(origin) || extra.includes(origin);
 }
 
+// The Host header's name without port or IPv6 brackets, lowercased.
+export function hostName(header: string | undefined): string | undefined {
+  if (!header) {
+    return undefined;
+  }
+  const match = /^\[([^\]]+)\](?::\d+)?$/.exec(header) ?? /^([^:]+)(?::\d+)?$/.exec(header);
+  return match?.[1]?.toLowerCase();
+}
+
 export function extractToken(req: IncomingMessage): string | undefined {
   const url = new URL(req.url ?? "/", "http://localhost");
   const query = url.searchParams.get("tkn");
@@ -61,20 +73,25 @@ export class AhpListener {
   private readonly live = new Map<string, Set<LiveConnection>>();
   private readonly failures = new Map<string, number[]>();
   private readonly host: string;
+  private readonly checkHost: boolean;
+  private readonly allowedHosts: Set<string>;
   private readonly now: () => number;
   private readonly unsubscribeRevoke: () => void;
   private readonly watchTimer: NodeJS.Timeout;
 
   constructor(private readonly options: ListenerOptions) {
     this.host = options.host ?? "127.0.0.1";
-    if (!LOOPBACK_HOSTS.has(this.host)) {
-      throw new Error(`refusing to listen on non-loopback host ${this.host}`);
+    this.checkHost = !LOOPBACK_HOSTS.has(this.host);
+    if (this.checkHost && !options.tls) {
+      throw new Error(`refusing to listen on non-loopback host ${this.host} without a TLS cert and key`);
     }
+    this.allowedHosts = new Set([this.host, ...(options.allowedHosts ?? [])].map((entry) => entry.toLowerCase()));
     this.now = options.now ?? Date.now;
-    this.server = createServer((_req, res) => {
+    const handler = (_req: IncomingMessage, res: ServerResponse): void => {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("hydra-ahp\n");
-    });
+    };
+    this.server = options.tls ? createHttpsServer({ cert: options.tls.cert, key: options.tls.key }, handler) : createHttpServer(handler);
     this.server.on("upgrade", (req, socket, head) => {
       this.handleUpgrade(req, socket, head);
     });
@@ -123,6 +140,14 @@ export class AhpListener {
       log.warn(`rejected upgrade from origin ${req.headers.origin}`);
       reply(socket, "403 Forbidden");
       return;
+    }
+    if (this.checkHost) {
+      const name = hostName(req.headers.host);
+      if (name === undefined || !this.allowedHosts.has(name)) {
+        log.warn(`rejected upgrade for host ${req.headers.host}`);
+        reply(socket, "403 Forbidden");
+        return;
+      }
     }
     // Every client on loopback shares one address, so a valid token is never held back by someone else's bad ones.
     const token = extractToken(req);
