@@ -1,6 +1,6 @@
 {
   "name": "@hydra-acp/ahp",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Serve Hydra sessions to Agent Host Protocol (AHP) clients such as VS Code.",
   "license": "MIT",
   "type": "module",
