@@ -215,12 +215,15 @@ export class Catalog {
   setFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
     const { isRead, ...rest } = patch;
     let changed = false;
-    if (isRead !== undefined && isRead !== this.isRead(hydraId)) {
+    if (isRead !== undefined) {
+      // Sent even when the polled row already agrees: the row lags the turn
+      // that just ended, so the mark this extension would call redundant is
+      // the one the daemon is missing. It ignores a mark that changes nothing.
+      changed = isRead !== this.isRead(hydraId);
       this.readOverrides.set(hydraId, { read: isRead, at: Date.now() });
       void this.rest.patchSession(hydraId, { read: isRead }).catch((err: unknown) => {
         log.warn(`marking ${hydraId} ${isRead ? "read" : "unread"} failed`, err instanceof Error ? err.message : err);
       });
-      changed = true;
     }
     if (Object.keys(rest).length > 0 && this.patchFlags(hydraId, rest)) {
       changed = true;

@@ -49,6 +49,16 @@ describe("read state from the daemon", () => {
     expect(summaryRead()).toBe(true);
   });
 
+  it("sends a mark the polled row calls redundant, which lags a turn that just ended", async () => {
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW()];
+    });
+    expect(summaryRead()).toBe(true);
+    harness.catalog.setFlags("h1", { isRead: true });
+    await sleep(50);
+    expect(harness.hydra.writes).toContainEqual({ method: "PATCH", id: "h1", params: { read: true } });
+  });
+
   it("lets a turn that ends after the mark make the session unread again", async () => {
     harness = await startBridgeHarness((hydra) => {
       hydra.rows = [ROW({ unread: true, lastTurnEndedAt: Date.now() - 60_000 })];
