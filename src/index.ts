@@ -12,6 +12,9 @@ const log = logger("main");
 
 const { version: VERSION } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
+const USAGE = `usage: hydra-ahp [token <mint|url|list|revoke> ... | url [label] | tailscale setup]
+With no arguments hydra-ahp runs as a Hydra extension.`;
+
 function runCli(argv: string[]): void {
   const env = withConf(process.env, confPath(process.env));
   const tokens = new TokenRegistry({ path: tokensPath(process.env) });
@@ -33,7 +36,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     runCli(argv.slice(1));
     return;
   }
-  if (argv[0] === "tailscale" && argv[1] === "setup") {
+  if ((argv[0] === "tailscale" || argv[0] === "tailnet") && argv[1] === "setup") {
     const { runTailscaleSetup } = await import("./setup/wizard.js");
     await runTailscaleSetup();
     return;
@@ -41,6 +44,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (argv[0] === "url") {
     runCli(["url", ...argv.slice(1)]);
     return;
+  }
+  if (argv.length > 0) {
+    process.stderr.write(`${USAGE}\n`);
+    process.exit(2);
   }
   const app = await startApp(loadConfig(withConf(process.env, confPath(process.env))), VERSION);
   const shutdown = (): void => {
