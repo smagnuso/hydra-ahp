@@ -13,6 +13,8 @@ export interface HydraSessionEntry {
   sessionId: string;
   agentId?: string;
   cwd?: string;
+  // Present while the session runs in an isolated workspace, whose path is then the cwd.
+  workspace?: { path: string; sourceCwd: string; label?: string };
   title?: string;
   status?: "warm" | "cold";
   busy?: boolean;

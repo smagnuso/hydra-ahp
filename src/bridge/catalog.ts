@@ -1,4 +1,4 @@
-import type { AgentInfo, Changeset, RootState, SessionConfigState, SessionSummary } from "@microsoft/agent-host-protocol";
+import type { AgentInfo, Changeset, RootState, SessionConfigState, SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
 import { changesetsFor } from "../changesets/service.js";
 import { ROOT_URI } from "../protocol/channels.js";
 import type { ProtocolCore } from "../protocol/core.js";
@@ -86,6 +86,7 @@ export class Catalog {
   // Each session's read state as of the last reconcile, so a change a poll brings can reach open channels.
   private readonly lastRead = new Map<string, boolean>();
   private readonly changeListeners = new Set<() => void>();
+  private readonly directoryListeners = new Set<(uri: string, directory: string | undefined) => void>();
   private cursor: number | undefined;
   private polls = 0;
   private rawAgents: HydraAgent[] = [];
@@ -247,6 +248,11 @@ export class Catalog {
 
   private patchFlags(hydraId: string, patch: Partial<SessionFlags>): boolean {
     return this.isLocal(hydraId) ? this.setSessionFlags(hydraId, patch) : (this.options.flags?.set(hydraId, patch) ?? false);
+  }
+
+  // Listeners hear when a session's working directory moved, as when it entered or left a workspace.
+  onDirectoryChanged(listener: (uri: string, directory: string | undefined) => void): void {
+    this.directoryListeners.add(listener);
   }
 
   // Listeners hear of a mark that changed without a client asking (a turn ended, or one brought the session back from done), so its open channels can follow.
@@ -588,6 +594,7 @@ export class Catalog {
         }
         continue;
       }
+      this.followDirectory(uri, before, summary);
       const changes = diffSummary(before, summary);
       if (changes && announce) {
         this.core.notify(ROOT_URI, "root/sessionSummaryChanged", { channel: ROOT_URI, session: uri, changes });
@@ -605,6 +612,26 @@ export class Catalog {
     this.syncRoot();
     for (const listener of this.changeListeners) {
       listener();
+    }
+  }
+
+  // An open session channel keeps its working directory in step: the agent was respawned elsewhere, so the held slot is replaced.
+  private followDirectory(uri: string, before: SessionSummary, after: SessionSummary): void {
+    const was = before.workingDirectories?.[0];
+    const now = after.workingDirectories?.[0];
+    if (was === now) {
+      return;
+    }
+    const state = this.core.store.state(uri) as SessionState | undefined;
+    if (state) {
+      if (was && now && state.workingDirectories?.includes(was)) {
+        this.core.publish(uri, action({ type: "session/workingDirectoryReplaced", directory: was, replacement: now }));
+      } else if (now && !state.workingDirectories?.includes(now)) {
+        this.core.publish(uri, action({ type: "session/workingDirectorySet", directory: now }));
+      }
+    }
+    for (const listener of this.directoryListeners) {
+      listener(uri, this.localCwdOf(uri));
     }
   }
 

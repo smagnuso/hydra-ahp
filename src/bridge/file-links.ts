@@ -92,7 +92,14 @@ export class FileLinks {
   private root: string | undefined;
   private readonly found = new Map<string, string>();
 
-  constructor(private readonly cwd: string) {}
+  constructor(private cwd: string) {}
+
+  // The session moved to another directory; what was found or resolved against the old one no longer holds.
+  retarget(cwd: string): void {
+    this.cwd = cwd;
+    this.root = undefined;
+    this.found.clear();
+  }
 
   // A relative link target the agent wrote; it chose to link, so the file is not looked for.
   target(target: string): string | undefined {

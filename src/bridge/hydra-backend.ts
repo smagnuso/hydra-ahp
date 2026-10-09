@@ -89,6 +89,13 @@ export class HydraBackend implements Backend {
     this.changesets?.start(core);
     this.catalog.onChange(() => this.onCatalogChange());
     this.catalog.onFlagChanged((hydraId, flag, value) => this.bridges.get(hydraId)?.showFlag(flag, value));
+    this.catalog.onDirectoryChanged((uri, directory) => {
+      for (const [hydraId, bridge] of this.bridges) {
+        if (this.catalog.groupOf(hydraId) === uri) {
+          bridge.retarget(directory);
+        }
+      }
+    });
     await this.catalog.start(core);
   }
 

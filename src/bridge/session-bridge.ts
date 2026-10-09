@@ -194,6 +194,8 @@ export class SessionBridge implements SessionListener {
   private headless = false;
   commands: unknown;
 
+  private fileLinks: FileLinks | undefined;
+
   constructor(private readonly deps: BridgeDeps) {
     this.mapper = this.newMapper();
   }
@@ -201,12 +203,20 @@ export class SessionBridge implements SessionListener {
   private newMapper(): ChatMapper {
     const { edits: store, catalog } = this.deps;
     const cwd = catalog.localCwdOf(this.deps.sessionUri);
+    this.fileLinks = cwd ? new FileLinks(cwd) : undefined;
     return new ChatMapper({
       ...(store ? { edits: { chatUri: this.deps.chatUri, put: (uri: string, text: string) => store.put(uri, text) } } : {}),
       sourceOf: (hydraId) => (catalog.entry(hydraId) ? { session: catalog.uriFor(hydraId), chat: catalog.chatOf(hydraId) } : undefined),
       sessionLink: (hydraId) => (catalog.isListed(hydraId) ? vscodeSessionLink(catalog.uriFor(hydraId)) : undefined),
-      ...(cwd ? { fileLinks: new FileLinks(cwd), readImage: readLocalImage } : {}),
+      ...(this.fileLinks ? { fileLinks: this.fileLinks, readImage: readLocalImage } : {}),
     });
+  }
+
+  // Links for text the agent writes next resolve against the session's new directory.
+  retarget(cwd: string | undefined): void {
+    if (cwd) {
+      this.fileLinks?.retarget(cwd);
+    }
   }
 
   get hydraId(): string {

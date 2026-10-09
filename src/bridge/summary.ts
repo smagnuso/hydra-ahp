@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { Changeset, SessionConfigState, SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
 import type { HydraSessionEntry } from "../hydra/rest.js";
 import { NO_FLAGS, type SessionFlags } from "../store/flags.js";
@@ -82,6 +83,8 @@ export function groupToSummary(members: readonly GroupMember[], uri: string): Se
   };
   if (entry.cwd && !remote && !isFederatedId(entry.sessionId)) {
     summary.workingDirectories = [cwdToUri(entry.cwd)];
+    const home = entry.workspace?.sourceCwd ?? entry.cwd;
+    summary.project = { uri: cwdToUri(home), displayName: basename(home) || home };
   }
   if (remote) {
     summary.project = { uri: `hydra-remote:/${encodeURIComponent(remote)}`, displayName: remote };
