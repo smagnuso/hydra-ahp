@@ -48,6 +48,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.2",
     "tsup": "^8.5.1",
     "typescript": "^5.6.3",
@@ -55,6 +56,7 @@
   },
   "dependencies": {
     "@microsoft/agent-host-protocol": "1.0.0",
+    "qrcode-terminal": "^0.12.0",
     "ws": "^8.22.0"
   },
   "optionalDependencies": {

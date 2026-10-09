@@ -1,3 +1,4 @@
+import qrcode from "qrcode-terminal";
 import { FILE_LEVELS, isFileLevel, type FileLevel, type TokenRegistry } from "../store/tokens.js";
 
 export const COMMAND_VERB = "token";
@@ -63,6 +64,14 @@ function connectUrl(address: string, token: string, scheme: string): string {
   return `${scheme}://${address}?tkn=${encodeURIComponent(token)}`;
 }
 
+function qrText(url: string): string {
+  let out = "";
+  qrcode.generate(url, { small: true }, (code) => {
+    out = code;
+  });
+  return out.trimEnd();
+}
+
 // Runs one "token ..." invocation and returns the reply text.
 export function runTokenCommand(context: TokenCommandContext, args: string): string {
   const words = args.trim().split(/\s+/).filter(Boolean);
@@ -91,7 +100,8 @@ export function runTokenCommand(context: TokenCommandContext, args: string): str
         return parsed;
       }
       const { token } = context.tokens.mint(parsed.label, parsed.level);
-      return withWarning(context, connectUrl(context.address(), token, context.scheme?.() ?? "ws"));
+      const url = connectUrl(context.address(), token, context.scheme?.() ?? "ws");
+      return withWarning(context, `${url}\n\n${qrText(url)}`);
     }
     case "list": {
       const rows = context.tokens.list();

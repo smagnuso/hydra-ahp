@@ -29,10 +29,10 @@ describe("token verbs", () => {
     expect(tokens.validate(decodeURIComponent(url.split("tkn=")[1] as string))?.label).toBe("vscode");
   });
 
-  it("url mints a token and prints only the url, with a default label", () => {
+  it("url mints a token and prints the url and a QR code, with a default label", () => {
     const { run, tokens } = setup();
     const reply = run("url --files read");
-    expect(reply).toMatch(/^ws:\/\/127\.0\.0\.1:55590\?tkn=\S+$/);
+    expect(reply).toMatch(/^ws:\/\/127\.0\.0\.1:55590\?tkn=\S+\n\n\S/);
     expect(tokens.list()[0]).toMatchObject({ label: "url", level: "read" });
     run("url laptop");
     expect(tokens.list().map((t) => t.label)).toContain("laptop");
