@@ -22,6 +22,9 @@ export const MAX_SCOPED_TEXT_BYTES = 2 * 1024 * 1024;
 export const MAX_SCOPED_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_UNSCOPED_READ_BYTES = 32 * 1024 * 1024;
 const SNIFF_BYTES = 8192;
+const MAX_CACHED_READ_BYTES = 32 * 1024 * 1024;
+const MAX_CACHED_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_CACHED_READ_ENTRIES = 4096;
 
 const MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
@@ -60,6 +63,12 @@ export interface FileServiceOptions {
 interface Grant {
   real: string;
   dirsOnly: boolean;
+}
+
+interface CachedFileRead {
+  fingerprint: string;
+  bytes: Buffer;
+  binary: boolean;
 }
 
 type Json = Record<string, unknown>;
@@ -109,6 +118,10 @@ function etagOf(info: Stats): string {
   return `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
 }
 
+function fingerprintOf(info: Stats): string {
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+}
+
 // Maps filesystem errors onto AHP's resource error codes.
 export function fsError(err: unknown): RpcError {
   if (err instanceof RpcError) {
@@ -149,6 +162,8 @@ export class FileService {
   readonly edited: EditedPaths;
   private readonly sessions: SessionDirectory;
   private readonly dirRoots: string[];
+  private readonly readCache = new Map<string, CachedFileRead>();
+  private readCacheBytes = 0;
 
   constructor(options: FileServiceOptions) {
     this.sessions = options.sessions;
@@ -285,8 +300,11 @@ export class FileService {
       throw new RpcError(ErrorCodes.InvalidParams, "not a file");
     }
     const scoped = level === "scoped";
-    const binary = await looksBinary(grant.real);
     const contentType = mimeFor(grant.real);
+    const wantsWindow =
+      typeof params.fromLine === "number" || typeof params.lineCount === "number" || typeof params.locate === "string";
+    const cached = wantsWindow ? undefined : this.cachedRead(grant.real, info);
+    const binary = cached?.binary ?? await looksBinary(grant.real);
     if (binary) {
       if (scoped && !isImage(grant.real)) {
         throw new RpcError(ErrorCodes.InvalidParams, "binary file");
@@ -295,11 +313,13 @@ export class FileService {
       if (info.size > cap) {
         throw new RpcError(ErrorCodes.InvalidParams, `file too large (${info.size} bytes, limit ${cap})`);
       }
-      const data = (await readFile(grant.real)).toString("base64");
+      const bytes = cached?.bytes ?? await readFile(grant.real);
+      if (!cached) {
+        this.rememberRead(grant.real, info, bytes, true);
+      }
+      const data = bytes.toString("base64");
       return { data, encoding: "base64", ...(contentType ? { contentType } : {}) };
     }
-    const wantsWindow =
-      typeof params.fromLine === "number" || typeof params.lineCount === "number" || typeof params.locate === "string";
     if (wantsWindow) {
       const window = await readFileWindow(grant.real, {
         ...(typeof params.fromLine === "number" ? { fromLine: params.fromLine } : {}),
@@ -320,11 +340,53 @@ export class FileService {
         `file too large (${info.size} bytes, limit ${cap}); request a window with fromLine and lineCount`,
       );
     }
-    const bytes = await readFile(grant.real);
+    const bytes = cached?.bytes ?? await readFile(grant.real);
+    if (!cached) {
+      this.rememberRead(grant.real, info, bytes, false);
+    }
     if (params.encoding === "base64") {
       return { data: bytes.toString("base64"), encoding: "base64", contentType: contentType ?? "text/plain" };
     }
     return { data: bytes.toString("utf8"), encoding: "utf-8", contentType: contentType ?? "text/plain" };
+  }
+
+  private cachedRead(path: string, info: Stats): CachedFileRead | undefined {
+    const cached = this.readCache.get(path);
+    if (!cached) {
+      return undefined;
+    }
+    if (cached.fingerprint !== fingerprintOf(info)) {
+      this.readCacheBytes -= cached.bytes.length;
+      this.readCache.delete(path);
+      return undefined;
+    }
+    this.readCache.delete(path);
+    this.readCache.set(path, cached);
+    return cached;
+  }
+
+  private rememberRead(path: string, info: Stats, bytes: Buffer, binary: boolean): void {
+    if (bytes.length > MAX_CACHED_FILE_BYTES) {
+      return;
+    }
+    const previous = this.readCache.get(path);
+    if (previous) {
+      this.readCacheBytes -= previous.bytes.length;
+      this.readCache.delete(path);
+    }
+    this.readCache.set(path, { fingerprint: fingerprintOf(info), bytes, binary });
+    this.readCacheBytes += bytes.length;
+    while (this.readCacheBytes > MAX_CACHED_READ_BYTES || this.readCache.size > MAX_CACHED_READ_ENTRIES) {
+      const oldest = this.readCache.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      const evicted = this.readCache.get(oldest);
+      if (evicted) {
+        this.readCacheBytes -= evicted.bytes.length;
+      }
+      this.readCache.delete(oldest);
+    }
   }
 
   private async complete(params: Json): Promise<unknown> {

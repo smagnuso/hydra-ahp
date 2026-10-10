@@ -145,6 +145,14 @@ describe("file access", () => {
       expect(resolved.etag).toBeTruthy();
     });
 
+    it("invalidates cached content when a file changes", async () => {
+      const file = join(proj, "cached.txt");
+      writeFileSync(file, "old");
+      expect((await client.resourceRead({ uri: u(file) })).data).toBe("old");
+      writeFileSync(file, "new");
+      expect((await client.resourceRead({ uri: u(file) })).data).toBe("new");
+    });
+
     it("answers NotFound for a missing path inside scope", async () => {
       expect(await code(client.resourceRead({ uri: u(join(proj, "nope.txt")) }))).toBe(NOT_FOUND);
     });

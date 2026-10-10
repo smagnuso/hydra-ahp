@@ -168,13 +168,9 @@ export class Catalog {
     return lead && this.isLocal(lead) ? this.entries.get(lead)?.cwd : undefined;
   }
 
-  // When the earliest of a session's Hydra sessions was created.
-  startedAt(sessionUri: string): string | undefined {
-    const times = this.membersOf(sessionUri)
-      .map((id) => this.entries.get(id)?.createdAt)
-      .filter((at): at is string => typeof at === "string")
-      .sort();
-    return times[0];
+  isCold(sessionUri: string): boolean {
+    const members = this.membersOf(sessionUri);
+    return members.length === 0 || members.every((id) => this.entries.get(id)?.status === "cold");
   }
 
   changesetsOf(sessionUri: string): Changeset[] | undefined {

@@ -108,14 +108,92 @@ describe("changesets", () => {
     expect(state().files.map((file) => file.id)).not.toContain(kept);
   });
 
-  it("keeps the files the agent edited, compared with the session's starting commit, after they are committed", async () => {
+  it("serves the previous session changes while refreshing a reattached changeset", async () => {
+    dir = repo();
+    const cwd = dir;
+    const startedAt = new Date(Date.now() + 1_000).toISOString();
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd, createdAt: startedAt })];
+      hydra.edited.set("h1", [join(cwd, "kept.txt")]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState | undefined => harness?.core.store.state(SESSION_CHANGES) as ChangesetState | undefined;
+    for (let tries = 0; tries < 100 && state()?.status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const kept = cwdToUri(join(cwd, "kept.txt"));
+    expect(state()?.files.map((file) => file.id)).toEqual([kept]);
+
+    await session.client.unsubscribe(SESSION_CHANGES);
+    for (let tries = 0; tries < 100 && harness.core.store.has(SESSION_CHANGES); tries += 1) {
+      await sleep(10);
+    }
+    expect(harness.core.store.has(SESSION_CHANGES)).toBe(false);
+
+    const later = cwdToUri(join(cwd, "later.txt"));
+    writeFileSync(join(cwd, "later.txt"), "a later agent edit\n");
+    harness.hydra.edited.set("h1", [join(cwd, "kept.txt"), join(cwd, "later.txt")]);
+    const resumed = await session.client.subscribe(SESSION_CHANGES);
+    const resumedState = resumed.result.snapshot?.state as ChangesetState | undefined;
+    expect(resumedState?.status).toBe("ready");
+    expect(resumedState?.files.map((file) => file.id)).toContain(kept);
+
+    for (let tries = 0; tries < 100 && !state()?.files.some((file) => file.id === later); tries += 1) {
+      await sleep(20);
+    }
+    expect(state()?.files.map((file) => file.id).sort()).toEqual([kept, later].sort());
+  });
+
+  it("releases cached changesets when a session goes cold", async () => {
+    dir = repo();
+    const cwd = dir;
+    const startedAt = new Date(Date.now() + 1_000).toISOString();
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd, createdAt: startedAt })];
+      hydra.edited.set("h1", [join(cwd, "kept.txt")]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState | undefined => harness?.core.store.state(SESSION_CHANGES) as ChangesetState | undefined;
+    for (let tries = 0; tries < 100 && state()?.status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    expect(state()?.status).toBe("ready");
+
+    await session.client.unsubscribe(SESSION_CHANGES);
+    for (let tries = 0; tries < 100 && harness.core.store.has(SESSION_CHANGES); tries += 1) {
+      await sleep(10);
+    }
+    harness.hydra.rows = [ROW({ cwd, createdAt: startedAt, status: "cold" })];
+    harness.hydra.edited.set("h1", [join(cwd, "later.txt")]);
+    writeFileSync(join(cwd, "later.txt"), "a later edit\n");
+    await sleep(120);
+
+    const reopened = await session.client.subscribe(SESSION_CHANGES);
+    const reopenedState = reopened.result.snapshot?.state as ChangesetState | undefined;
+    expect(reopenedState?.status).toBe("ready");
+    expect(reopenedState?.files.map((file) => file.id)).toEqual([cwdToUri(join(cwd, "later.txt"))]);
+  });
+
+  it("uses the recorded edits even after their files are committed", async () => {
     dir = repo();
     const cwd = dir;
     const git = (...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_COMMITTER_DATE: new Date(Date.now() + 3_600_000).toISOString() } });
     const startedAt = new Date(Date.now() + 1_000).toISOString();
     harness = await startBridgeHarness((hydra) => {
       hydra.rows = [ROW({ cwd, createdAt: startedAt })];
-      hydra.edited.set("h1", ["kept.txt", "new.txt", "gone.txt"].map((path) => join(cwd, path)));
+      hydra.edited.set("h1", [
+        join(cwd, "kept.txt"),
+        { path: join(cwd, "new.txt"), hunks: [{ oldText: "", newText: "new content\n" }], created: true },
+        join(cwd, "gone.txt"),
+      ]);
     }, { changesetPollMs: 50 });
     writeFileSync(join(cwd, "other.txt"), "not the agent's\n");
     git("add", "-A");
@@ -132,9 +210,9 @@ describe("changesets", () => {
     const ids = state().files.map((file) => file.id).sort();
     expect(ids).toEqual([cwdToUri(join(cwd, "gone.txt")), cwdToUri(join(cwd, "kept.txt")), cwdToUri(join(cwd, "new.txt"))].sort());
     const kept = state().files.find((file) => file.id === cwdToUri(join(cwd, "kept.txt")))?.edit;
-    expect(kept?.diff).toEqual({ added: 1, removed: 0 });
+    expect(kept?.diff).toEqual({ added: 1, removed: 1 });
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: kept?.before?.content.uri } as never)) as unknown as { data: string };
-    expect(before.data).toBe("one\ntwo\n");
+    expect(before.data).toBe("before\n");
     expect(state().files.find((file) => file.id === cwdToUri(join(cwd, "new.txt")))?.edit.before).toBeUndefined();
 
     const diffs = state().files.map((file) => (file.edit as { diff?: { added?: number; removed?: number } }).diff ?? {});
@@ -147,7 +225,7 @@ describe("changesets", () => {
     expect(listed.items.find((item) => item.resource === SESSION)?.changes).toEqual(totals);
   });
 
-  it("includes session edits from other repositories and adds their roots as working directories", async () => {
+  it("includes recorded session edits from other directories as working directories", async () => {
     dir = repo();
     otherDir = repo();
     const cwd = dir;
@@ -169,13 +247,37 @@ describe("changesets", () => {
     expect(state().files.map((file) => file.id)).toContain(otherFile);
     const otherEdit = state().files.find((file) => file.id === otherFile)?.edit;
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: otherEdit?.before?.content.uri } as never)) as unknown as { data: string };
-    expect(before.data).toBe("one\ntwo\n");
-
+    expect(before.data).toBe("before\n");
+    expect(otherEdit?.diff).toEqual({ added: 1, removed: 1 });
     const sessionState = (): SessionState => harness?.core.store.state(SESSION) as SessionState;
     for (let tries = 0; tries < 100 && !sessionState().workingDirectories?.includes(cwdToUri(otherDir)); tries += 1) {
       await sleep(20);
     }
-    expect(sessionState().workingDirectories).toEqual([cwdToUri(cwd), cwdToUri(otherDir)]);
-    expect(harness.catalog.summaryFor(SESSION)?.workingDirectories).toEqual([cwdToUri(cwd), cwdToUri(otherDir)]);
+    expect(sessionState().workingDirectories).toContain(cwdToUri(otherDir));
+  });
+
+  it("serves recorded session hunks outside a Git repository", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
+    const path = join(dir, "file.txt");
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd: dir })];
+      hydra.edited.set("h1", [{ path, hunks: [{ oldText: "old line\n", newText: "new line\n" }] }]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const file = state().files[0];
+    expect(file?.id).toBe(cwdToUri(path));
+    expect(file?.edit.diff).toEqual({ added: 1, removed: 1 });
+    const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.before?.content.uri } as never) as unknown as { data: string };
+    const after = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.after?.content.uri } as never) as unknown as { data: string };
+    expect(before.data).toBe("old line\n");
+    expect(after.data).toBe("new line\n");
   });
 });

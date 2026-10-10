@@ -121,7 +121,9 @@ export class FakeHydra {
     listSessions: async () => ({ sessions: this.rows, removed: [], cursor: 1 }),
     agents: async () => ({ agents: [] }),
     config: async () => ({}),
-    sessionDiff: async (id: string) => (this.edited.get(id) ?? []).map((path) => ({ path, hunks: [] })),
+    sessionDiff: async (id: string) => (this.edited.get(id) ?? []).map((file) => typeof file === "string"
+      ? { path: file, hunks: [{ oldText: "before\n", newText: "after\n" }] }
+      : file),
     historyPage: async (_id: string, beforeSeq: number, turns?: number) => {
       this.pageCalls.push({ beforeSeq, ...(turns !== undefined ? { turns } : {}) });
       if (beforeSeq === Number.MAX_SAFE_INTEGER) {
@@ -144,7 +146,7 @@ export class FakeHydra {
   // What GET /v1/sessions/:id adds to a row: Hydra's live view of who is attached and whether it is working.
   live: Partial<HydraSessionEntry> = { status: "warm", attachedClients: 1 };
   readonly buckets = new Map<string, Record<string, unknown>>();
-  readonly edited = new Map<string, string[]>();
+  readonly edited = new Map<string, Array<string | { path: string; hunks: Array<{ oldText: string; newText: string }>; created?: boolean }>>();
   extState = {
     get: async (id: string, key: string) => this.buckets.get(id)?.[key] ?? null,
     list: async (id: string) => ({ ...this.buckets.get(id) }),
@@ -195,9 +197,9 @@ export async function startBridgeHarness(
   const changesets = withChangesets
     ? new ChangesetService({
         cwdOf: (uri) => catalog.localCwdOf(uri),
+        isCold: (uri) => catalog.isCold(uri),
         membersOf: (uri) => catalog.membersOf(uri),
-        startedAt: (uri) => catalog.startedAt(uri),
-        editedPaths: async (id) => (await hydra.rest.sessionDiff(id)).map((file) => file.path),
+        sessionEdits: (id) => hydra.rest.sessionDiff(id),
         onSessionTotals: (uri, totals) => catalog.noteChanges(uri, totals),
         onWorkdirs: (uri, directories) => catalog.noteWorkdirs(uri, directories),
         pollMs: changesetPollMs,

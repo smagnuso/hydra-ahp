@@ -98,9 +98,9 @@ export async function startApp(initial: Config, version: string): Promise<App> {
   const terminals = new TerminalService();
   const changesets = new ChangesetService({
     cwdOf: (uri) => catalog.localCwdOf(uri),
+    isCold: (uri) => catalog.isCold(uri),
     membersOf: (uri) => catalog.membersOf(uri),
-    startedAt: (uri) => catalog.startedAt(uri),
-    editedPaths: async (id) => (await rest.sessionDiff(id)).map((file) => file.path),
+    sessionEdits: (id) => rest.sessionDiff(id),
     onSessionTotals: (uri, totals) => catalog.noteChanges(uri, totals),
     onWorkdirs: (uri, directories) => catalog.noteWorkdirs(uri, directories),
   });

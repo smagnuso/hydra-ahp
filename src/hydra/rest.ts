@@ -174,7 +174,7 @@ export class HydraRest {
   }
 
   // Hydra's per-file aggregation of the edits a session's tool calls recorded.
-  sessionDiff(id: string): Promise<Array<{ path: string; created?: boolean }>> {
+  sessionDiff(id: string): Promise<Array<{ path: string; hunks: Array<{ oldText: string; newText: string }>; created?: boolean }>> {
     return this.request("GET", `/v1/sessions/${encodeURIComponent(id)}/diff`);
   }
 

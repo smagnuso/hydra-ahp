@@ -133,6 +133,7 @@ export class HydraBackend implements Backend {
   }
 
   private onCatalogChange(): void {
+    this.changesets?.pruneColdSnapshots();
     for (const [hydraId, bridge] of [...this.bridges]) {
       // A session whose agent changed moves to the new agent's URI; its old channels are gone, so is its bridge.
       const moved = bridge.session !== this.catalog.groupOf(hydraId) || bridge.chat !== this.catalog.chatOf(hydraId);
