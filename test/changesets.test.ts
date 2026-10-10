@@ -216,7 +216,7 @@ describe("changesets", () => {
     const kept = state().files.find((file) => file.id === cwdToUri(join(cwd, "kept.txt")))?.edit;
     expect(kept?.diff).toEqual({ added: 1, removed: 1 });
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: kept?.before?.content.uri } as never)) as unknown as { data: string };
-    expect(before.data).toBe("// Recorded edit 1\nbefore\n");
+    expect(before.data).toBe("before\n");
     expect(state().files.find((file) => file.id === cwdToUri(join(cwd, "new.txt")))?.edit.before).toBeUndefined();
 
     const diffs = state().files.map((file) => (file.edit as { diff?: { added?: number; removed?: number } }).diff ?? {});
@@ -251,7 +251,7 @@ describe("changesets", () => {
     expect(state().files.map((file) => file.id)).toContain(otherFile);
     const otherEdit = state().files.find((file) => file.id === otherFile)?.edit;
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: otherEdit?.before?.content.uri } as never)) as unknown as { data: string };
-    expect(before.data).toBe("// Recorded edit 1\nbefore\n");
+    expect(before.data).toBe("before\n");
     expect(otherEdit?.diff).toEqual({ added: 1, removed: 1 });
     const sessionState = (): SessionState => harness?.core.store.state(SESSION) as SessionState;
     for (let tries = 0; tries < 100 && !sessionState().workingDirectories?.includes(cwdToUri(otherDir)); tries += 1) {
@@ -287,11 +287,37 @@ describe("changesets", () => {
     expect(state().files.map((file) => file.id)).toEqual([fileUri]);
     const file = state().files[0];
     expect(file?.edit.diff).toEqual({ added: 2, removed: 2 });
-    const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.before?.content.uri } as never) as unknown as { data: string };
+    expect(file?.edit.before).toBeUndefined();
     const after = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.after?.content.uri } as never) as unknown as { data: string };
-    expect(before.data).toBe("// Recorded edit 1\n/core\n// Recorded edit 2\n/ore");
     expect(after.data).toBe("new line\n");
     const listed = (await session.client.request("listSessions", {} as never)) as unknown as { items: { resource: string; changes?: unknown }[] };
     expect(listed.items.find((item) => item.resource === SESSION)?.changes).toEqual({ additions: 2, deletions: 2, files: 1 });
+  });
+
+  it("does not ask VS Code to diff synthetic content for oversized recorded hunks", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
+    const path = join(dir, "missing.txt");
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd: dir })];
+      hydra.edited.set("h1", [{
+        path,
+        hunks: [{ oldText: "old\n".repeat(2500), newText: "new\n".repeat(2500) }],
+      }]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+
+    const edit = state().files[0]?.edit;
+    expect(edit).toMatchObject({ diff: { added: 2500, removed: 2500 } });
+    expect(edit?.before).toBeUndefined();
+    expect(edit?.after.content.uri).not.toBe(`file://${path}`);
+    expect(edit?.before).toBeUndefined();
   });
 });

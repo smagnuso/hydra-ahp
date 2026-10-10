@@ -24,6 +24,8 @@ const MAX_CACHED_CHANNELS = 128;
 const MAX_CACHED_REVISION_BYTES = 32 * 1024 * 1024;
 const MAX_CACHED_REVISION_ENTRY_BYTES = 2 * 1024 * 1024;
 const MAX_CACHED_REVISION_ENTRIES = 4096;
+const MAX_RECORDED_DIFF_BYTES = 256 * 1024;
+const MAX_RECORDED_DIFF_LINES = 1000;
 
 export function changesetUri(sessionUri: string, id: ChangesetId): string {
   return `${sessionUri}${SEGMENT}${id}`;
@@ -320,9 +322,12 @@ export class ChangesetService {
     const created = file.created ?? file.hunks[0]?.oldText === "";
     const beforeUri = editContentUri(uri, fileUri, "before");
     let afterUri = fileUri;
-    const beforeText = recordedEditText(file.hunks, "oldText");
-    const afterText = recordedEditText(file.hunks, "newText");
-    this.rememberEditContent(watchedSessionUri(uri), beforeUri, beforeText);
+    const recordedContent = recordedEditContent(file.hunks);
+    const beforeText = recordedContent.before;
+    const afterText = recordedContent.after;
+    if (!created && recordedContent.usable) {
+      this.rememberEditContent(watchedSessionUri(uri), beforeUri, beforeText);
+    }
     try {
       if (!(await stat(file.path)).isFile()) {
         afterUri = editContentUri(uri, fileUri, "after");
@@ -330,7 +335,7 @@ export class ChangesetService {
     } catch {
       afterUri = editContentUri(uri, fileUri, "after");
     }
-    if (afterUri !== fileUri) {
+    if (afterUri !== fileUri && recordedContent.usable) {
       this.rememberEditContent(watchedSessionUri(uri), afterUri, afterText);
     }
     const added = file.hunks.reduce((total, hunk) => total + lineCount(hunk.newText), 0);
@@ -338,7 +343,7 @@ export class ChangesetService {
     return {
       id: fileUri,
       edit: {
-        ...(!created ? { before: { uri: fileUri, content: { uri: beforeUri } } } : {}),
+        ...(!created && recordedContent.usable ? { before: { uri: fileUri, content: { uri: beforeUri } } } : {}),
         after: { uri: fileUri, content: { uri: afterUri } },
         diff: { added, removed },
       },
@@ -524,7 +529,28 @@ function editContentUri(changesetUri: string, fileUri: string, side: "before" | 
   return `${EDIT_SCHEME}${id}`;
 }
 
-function recordedEditText(hunks: SessionEdit["hunks"], side: "oldText" | "newText"): string {
+function recordedEditContent(hunks: SessionEdit["hunks"]): { before: string; after: string; usable: boolean; bounded: boolean } {
+  if (hunks.length === 0) {
+    return { before: "", after: "", usable: false, bounded: false };
+  }
+  if (hunks.some((hunk) => hunk.oldText.includes("\0") || hunk.newText.includes("\0"))) {
+    return { before: "", after: "", usable: false, bounded: false };
+  }
+  const before = hunks.map((hunk) => hunk.oldText).join("");
+  const after = hunks.map((hunk) => hunk.newText).join("");
+  const lines = lineCount(before) + lineCount(after);
+  const bytes = Buffer.byteLength(before) + Buffer.byteLength(after);
+  const completeSnapshot = hunks.length === 1;
+  const bounded = lines <= MAX_RECORDED_DIFF_LINES && bytes <= MAX_RECORDED_DIFF_BYTES;
+  return {
+    before: completeSnapshot ? before : bounded ? addHunkSeparators(hunks, "oldText") : "",
+    after: completeSnapshot ? after : bounded ? addHunkSeparators(hunks, "newText") : "",
+    usable: completeSnapshot && bounded,
+    bounded,
+  };
+}
+
+function addHunkSeparators(hunks: SessionEdit["hunks"], side: "oldText" | "newText"): string {
   return hunks.map((hunk, index) => `// Recorded edit ${index + 1}\n${hunk[side]}`).join("\n");
 }
 
