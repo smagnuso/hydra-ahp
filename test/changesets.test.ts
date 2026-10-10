@@ -261,7 +261,13 @@ describe("changesets", () => {
     const path = join(dir, "file.txt");
     harness = await startBridgeHarness((hydra) => {
       hydra.rows = [ROW({ cwd: dir })];
-      hydra.edited.set("h1", [{ path, hunks: [{ oldText: "old line\n", newText: "new line\n" }] }]);
+      hydra.edited.set("h1", [{
+        path,
+        hunks: [
+          { oldText: "/core", newText: "/ore" },
+          { oldText: "/ore", newText: "/core" },
+        ],
+      }]);
     }, { changesetPollMs: 50 });
 
     const session = await harness.connect();
@@ -272,12 +278,15 @@ describe("changesets", () => {
     for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
       await sleep(20);
     }
-    const file = state().files[0];
-    expect(file?.id).toBe(cwdToUri(path));
-    expect(file?.edit.diff).toEqual({ added: 1, removed: 1 });
-    const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.before?.content.uri } as never) as unknown as { data: string };
-    const after = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.after?.content.uri } as never) as unknown as { data: string };
-    expect(before.data).toBe("old line\n");
-    expect(after.data).toBe("new line\n");
+    const fileUri = cwdToUri(path);
+    expect(state().files.map((file) => file.id)).toEqual([fileUri, `${fileUri}#ahp-hunk-1`]);
+    const sides = await Promise.all(state().files.map(async (file) => {
+      const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file.edit.before?.content.uri } as never) as unknown as { data: string };
+      const after = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file.edit.after?.content.uri } as never) as unknown as { data: string };
+      return [before.data, after.data];
+    }));
+    expect(sides).toEqual([["/core", "/ore"], ["/ore", "/core"]]);
+    const listed = (await session.client.request("listSessions", {} as never)) as unknown as { items: { resource: string; changes?: unknown }[] };
+    expect(listed.items.find((item) => item.resource === SESSION)?.changes).toEqual({ additions: 2, deletions: 2, files: 1 });
   });
 });
