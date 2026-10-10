@@ -797,10 +797,16 @@ export class Catalog {
     return agentId ? this.options.configs?.get(agentId) ?? [] : [];
   }
 
-  // The settings of a session: its default chat's live options.
+  // The settings schema is fixed when the session channel is built. A cold viewer attach can lack live options,
+  // so seed it from the last set seen for that agent until a live snapshot arrives.
   configStateFor(sessionUri: string): SessionConfigState | undefined {
     const lead = this.membersOf(sessionUri)[0];
-    return lead ? toConfigState(this.configOptionsFor(lead)) : undefined;
+    if (!lead) {
+      return undefined;
+    }
+    const entry = this.entries.get(lead);
+    const live = this.configOptionsFor(lead);
+    return toConfigState(live.length > 0 ? live : this.knownConfigFor(entry?.agentId));
   }
 
   // Paging is keyset based (newest first) so a concurrent change never repeats or skips a row.

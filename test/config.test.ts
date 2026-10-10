@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import type { ConfigStore } from "../src/store/configs.js";
+import type { SessionState } from "@microsoft/agent-host-protocol";
 import { optionIdOf, parseConfigOptions, propertyId, toConfigState } from "../src/bridge/config.js";
+import { ROW, startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
+import { sessionOf } from "./support/chat-uri.js";
 
 const effort = {
   id: "effort",
@@ -53,5 +57,48 @@ describe("toConfigState", () => {
   it("maps property ids back to Hydra's option ids", () => {
     expect(optionIdOf(propertyId("effort"))).toBe("effort");
     expect(optionIdOf("mode")).toBeUndefined();
+  });
+});
+
+describe("cached session config", () => {
+  let harness: BridgeHarness | undefined;
+
+  afterEach(async () => {
+    await harness?.stop();
+    harness = undefined;
+  });
+
+  it("seeds from the per-agent cache and forwards later config option updates", async () => {
+    const sessionUri = sessionOf("claude-1", "claude-personal");
+    const cached = parseConfigOptions([
+      { id: "mode", name: "Session Mode", currentValue: "default", options: [{ value: "default" }, { value: "plan" }] },
+      { id: "agent", name: "Agent", currentValue: "claude-personal", options: [{ value: "claude-personal" }] },
+      { ...effort, currentValue: "low" },
+    ]);
+    const configs = {
+      get: (agentId: string) => agentId === "claude-personal" ? cached : [],
+      set: () => false,
+    } as unknown as ConfigStore;
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ sessionId: "claude-1", agentId: "claude-personal" })];
+    }, { configs });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(sessionUri);
+    const state = (): SessionState => harness?.core.store.state(sessionUri) as SessionState;
+    expect(state().config?.values).toEqual({ "acp.mode": "default", "acp.agent": "claude-personal", "acp.effort": "low" });
+
+    harness.hydra.listener?.update({
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [
+          { id: "mode", name: "Session Mode", currentValue: "plan", options: [{ value: "default" }, { value: "plan" }] },
+          { id: "agent", name: "Agent", currentValue: "claude-personal", options: [{ value: "claude-personal" }] },
+          { ...effort, currentValue: "high" },
+        ],
+      },
+    });
+    expect(state().config?.values).toEqual({ "acp.mode": "plan", "acp.agent": "claude-personal", "acp.effort": "high" });
   });
 });
