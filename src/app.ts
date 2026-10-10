@@ -102,6 +102,7 @@ export async function startApp(initial: Config, version: string): Promise<App> {
     startedAt: (uri) => catalog.startedAt(uri),
     editedPaths: async (id) => (await rest.sessionDiff(id)).map((file) => file.path),
     onSessionTotals: (uri, totals) => catalog.noteChanges(uri, totals),
+    onWorkdirs: (uri, directories) => catalog.noteWorkdirs(uri, directories),
   });
   const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, changesets, permissionDelayMs: config.permissionDelayMs });
   const core = new ProtocolCore({ backend, detachGraceMs: DETACH_GRACE_MS });

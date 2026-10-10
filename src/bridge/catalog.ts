@@ -6,7 +6,7 @@ import type { ExtensionState } from "../hydra/ext-state.js";
 import type { HydraAgent, HydraRest, HydraSessionEntry, SessionPage } from "../hydra/rest.js";
 import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
-import { chatKey, defaultChatUri, isChatUri, isFederatedId, providerSessionUri, sessionOfDefaultChat, sessionUri } from "./ids.js";
+import { chatKey, cwdToUri, defaultChatUri, isChatUri, isFederatedId, providerSessionUri, sessionOfDefaultChat, sessionUri } from "./ids.js";
 import { NO_FLAGS, patchedFlags, readFlags, sameFlags, type FlagStore, type SessionFlags } from "../store/flags.js";
 import type { ConfigStore } from "../store/configs.js";
 import type { KnownModel, ModelStore } from "../store/models.js";
@@ -93,6 +93,7 @@ export class Catalog {
   private sessionDefaults: Record<string, Record<string, string>> = {};
   private agentList: AgentInfo[] = [];
   private readonly changeTotals = new Map<string, { additions: number; deletions: number; files: number }>();
+  private readonly discoveredWorkdirs = new Map<string, Set<string>>();
   private pollTimer: NodeJS.Timeout | undefined;
   private warmTimer: NodeJS.Timeout | undefined;
   private polling = false;
@@ -318,6 +319,22 @@ export class Catalog {
       return;
     }
     this.changeTotals.set(uri, totals);
+    this.reconcile();
+  }
+
+  noteWorkdirs(uri: string, directories: string[]): void {
+    const known = this.discoveredWorkdirs.get(uri) ?? new Set<string>();
+    const original = this.localCwdOf(uri);
+    const originalUri = original ? cwdToUri(original) : undefined;
+    const added = directories.map(cwdToUri).filter((directory) => directory !== originalUri && !known.has(directory));
+    if (added.length === 0) {
+      return;
+    }
+    for (const directory of added) {
+      known.add(directory);
+      this.core.publish(uri, action({ type: "session/workingDirectorySet", directory }));
+    }
+    this.discoveredWorkdirs.set(uri, known);
     this.reconcile();
   }
 
@@ -569,7 +586,11 @@ export class Catalog {
         flags: this.noteRead(id, this.flagsFor(id)),
         ...(this.sideOf(id) ? { origin: sideChatOrigin(this.sideOf(id) as SideOrigin) } : {}),
       }));
-      const summary = groupToSummary(members, uri);
+      const baseSummary = groupToSummary(members, uri);
+      const discovered = this.discoveredWorkdirs.get(uri);
+      const summary = discovered?.size
+        ? { ...baseSummary, workingDirectories: [...new Set([...(baseSummary.workingDirectories ?? []), ...discovered])] }
+        : baseSummary;
       const changes = this.changeTotals.get(uri);
       next.set(uri, changes ? { ...summary, changes } : summary);
     }

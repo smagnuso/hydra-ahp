@@ -29,9 +29,10 @@ function repo(): string {
   return dir;
 }
 
-describe("uncommitted changes", () => {
+describe("changesets", () => {
   let harness: BridgeHarness | undefined;
   let dir: string | undefined;
+  let otherDir: string | undefined;
 
   afterEach(async () => {
     await harness?.stop();
@@ -46,6 +47,16 @@ describe("uncommitted changes", () => {
         }
       }
       dir = undefined;
+    }
+    if (otherDir) {
+      try {
+        rmSync(otherDir, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 });
+      } catch (err) {
+        if (process.platform !== "win32") {
+          throw err;
+        }
+      }
+      otherDir = undefined;
     }
   });
 
@@ -134,5 +145,37 @@ describe("uncommitted changes", () => {
     };
     const listed = (await session.client.request("listSessions", {} as never)) as unknown as { items: { resource: string; changes?: unknown }[] };
     expect(listed.items.find((item) => item.resource === SESSION)?.changes).toEqual(totals);
+  });
+
+  it("includes session edits from other repositories and adds their roots as working directories", async () => {
+    dir = repo();
+    otherDir = repo();
+    const cwd = dir;
+    const startedAt = new Date(Date.now() + 1_000).toISOString();
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd, createdAt: startedAt })];
+      hydra.edited.set("h1", [join(cwd, "kept.txt"), join(otherDir as string, "kept.txt")]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const otherFile = cwdToUri(join(otherDir, "kept.txt"));
+    expect(state().files.map((file) => file.id)).toContain(otherFile);
+    const otherEdit = state().files.find((file) => file.id === otherFile)?.edit;
+    const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: otherEdit?.before?.content.uri } as never)) as unknown as { data: string };
+    expect(before.data).toBe("one\ntwo\n");
+
+    const sessionState = (): SessionState => harness?.core.store.state(SESSION) as SessionState;
+    for (let tries = 0; tries < 100 && !sessionState().workingDirectories?.includes(cwdToUri(otherDir)); tries += 1) {
+      await sleep(20);
+    }
+    expect(sessionState().workingDirectories).toEqual([cwdToUri(cwd), cwdToUri(otherDir)]);
+    expect(harness.catalog.summaryFor(SESSION)?.workingDirectories).toEqual([cwdToUri(cwd), cwdToUri(otherDir)]);
   });
 });

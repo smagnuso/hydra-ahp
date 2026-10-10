@@ -1,4 +1,5 @@
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import { stat } from "node:fs/promises";
 import type { Changeset, ChangesetFile, ChangesetState } from "@microsoft/agent-host-protocol";
 import { cwdToUri } from "../bridge/ids.js";
 import type { ProtocolCore } from "../protocol/core.js";
@@ -54,6 +55,8 @@ export interface ChangesetServiceOptions {
   editedPaths: (hydraId: string) => Promise<string[]>;
   // Receives the session changeset's line and file totals each time it is computed.
   onSessionTotals?: (sessionUri: string, totals: { additions: number; deletions: number; files: number }) => void;
+  // Receives Git roots outside the session's initial repository that its edits reached.
+  onWorkdirs?: (sessionUri: string, directories: string[]) => void;
   pollMs?: number;
   editsEveryMs?: number;
 }
@@ -66,8 +69,9 @@ interface Watched {
   computing: boolean;
   stopped: boolean;
   edited: Set<string>;
+  rootsByDirectory: Map<string, string>;
   editsReadAt: number;
-  base?: { commit: string | undefined };
+  bases?: Map<string, string | undefined>;
 }
 
 const action = (value: Record<string, unknown>) => value as never;
@@ -76,6 +80,7 @@ const action = (value: Record<string, unknown>) => value as never;
 export class ChangesetService {
   private core!: ProtocolCore;
   private readonly watched = new Map<string, Watched>();
+  private readonly repoRoots = new Map<string, Set<string>>();
 
   constructor(private readonly options: ChangesetServiceOptions) {}
 
@@ -99,6 +104,7 @@ export class ChangesetService {
       computing: false,
       stopped: false,
       edited: new Set(),
+      rootsByDirectory: new Map(),
       editsReadAt: 0,
     };
     this.watched.set(uri, watched);
@@ -137,8 +143,12 @@ export class ChangesetService {
     if (!match || !rev || !REVISION.test(rev) || segments.some((segment) => !segment) || segments.some(unsafeSegment)) {
       throw new RpcError(ErrorCodes.InvalidParams, "invalid changeset content uri");
     }
-    const cwd = this.options.cwdOf(changeset.slice(0, match.index));
-    const root = cwd ? await repoRoot(cwd) : undefined;
+    const sessionUri = changeset.slice(0, match.index);
+    const cwd = this.options.cwdOf(sessionUri);
+    const cwdRoot = cwd ? await repoRoot(cwd) : undefined;
+    const requestedRoot = query.get("root") ?? cwdRoot;
+    const isAllowedRoot = requestedRoot === cwdRoot || this.repoRoots.get(sessionUri)?.has(requestedRoot ?? "");
+    const root = requestedRoot && isAbsolute(requestedRoot) && isAllowedRoot ? requestedRoot : undefined;
     if (!root) {
       throw new RpcError(NOT_FOUND, "no such file or directory");
     }
@@ -187,20 +197,37 @@ export class ChangesetService {
       const changes = await workingChanges(cwd);
       return changes ? changes.files.map((file) => toChangesetFile(uri, changes.root, "HEAD", file)) : [];
     }
-    const root = await repoRoot(cwd);
-    if (!root) {
-      return [];
-    }
-    if (!watched.base) {
-      const started = this.options.startedAt(watched.sessionUri);
-      watched.base = { commit: started ? await commitAt(root, started) : undefined };
-    }
     await this.readEdits(watched);
-    const paths = [...watched.edited]
-      .map((path) => relative(root, path))
-      .filter((path) => path !== "" && !path.startsWith("..") && !isAbsolute(path));
-    const files = await changesSince(root, watched.base.commit, paths);
-    return files.map((file) => toChangesetFile(uri, root, watched.base?.commit ?? "HEAD", file));
+    const byRoot = new Map<string, Set<string>>();
+    for (const path of watched.edited) {
+      const root = await repoRootForPath(path, watched.rootsByDirectory);
+      if (!root) {
+        continue;
+      }
+      const relativePath = relative(root, path);
+      if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+        continue;
+      }
+      const paths = byRoot.get(root) ?? new Set<string>();
+      paths.add(relativePath);
+      byRoot.set(root, paths);
+    }
+    const roots = new Set(byRoot.keys());
+    this.repoRoots.set(watched.sessionUri, roots);
+    const initialRoot = await repoRoot(cwd);
+    const additionalRoots = [...roots].filter((root) => root !== initialRoot);
+    this.options.onWorkdirs?.(watched.sessionUri, additionalRoots);
+    const started = this.options.startedAt(watched.sessionUri);
+    const files = await Promise.all([...byRoot].map(async ([root, paths]) => {
+      watched.bases ??= new Map();
+      if (!watched.bases.has(root)) {
+        watched.bases.set(root, started ? await commitAt(root, started) : undefined);
+      }
+      const base = watched.bases.get(root);
+      const changed = await changesSince(root, base, [...paths]);
+      return changed.map((file) => toChangesetFile(uri, root, base ?? "HEAD", file));
+    }));
+    return files.flat();
   }
 
   private async readEdits(watched: Watched): Promise<void> {
@@ -261,8 +288,8 @@ function totalsOf(files: ChangesetFile[]): { additions: number; deletions: numbe
 }
 
 // VS Code labels a diff side by its content URI's path, so that is the file's own path; what git needs rides in the query.
-function revisionUri(fileUri: string, changesetUri: string, rev: string, path: string): string {
-  const query = new URLSearchParams({ changeset: changesetUri, rev, file: path });
+function revisionUri(fileUri: string, changesetUri: string, root: string, rev: string, path: string): string {
+  const query = new URLSearchParams({ changeset: changesetUri, root, rev, file: path });
   return `${REV_SCHEME}${new URL(fileUri).pathname}?${query.toString()}`;
 }
 
@@ -282,7 +309,7 @@ function revisionQuery(uri: string): URLSearchParams {
 
 function toChangesetFile(changesetUri: string, root: string, rev: string, file: ChangedFile): ChangesetFile {
   const fileUri = cwdToUri(join(root, file.path));
-  const beforeUri = revisionUri(fileUri, changesetUri, rev, file.path);
+  const beforeUri = revisionUri(fileUri, changesetUri, root, rev, file.path);
   const counts = { ...(file.added !== undefined ? { added: file.added } : {}), ...(file.removed !== undefined ? { removed: file.removed } : {}) };
   return {
     id: fileUri,
@@ -292,4 +319,34 @@ function toChangesetFile(changesetUri: string, root: string, rev: string, file: 
       ...(Object.keys(counts).length > 0 ? { diff: counts } : {}),
     },
   } as ChangesetFile;
+}
+
+async function repoRootForPath(path: string, cache: Map<string, string>): Promise<string | undefined> {
+  let directory = dirname(path);
+  const visited: string[] = [];
+  while (true) {
+    if (cache.has(directory)) {
+      const root = cache.get(directory) as string;
+      return root;
+    }
+    visited.push(directory);
+    try {
+      if ((await stat(directory)).isDirectory()) {
+        const root = await repoRoot(directory);
+        if (root) {
+          for (const candidate of visited) {
+            cache.set(candidate, root);
+          }
+          return root;
+        }
+      }
+    } catch {
+      // Deleted paths may have missing parent directories, so keep walking upward.
+    }
+    const parent = dirname(directory);
+    if (parent === directory) {
+      return undefined;
+    }
+    directory = parent;
+  }
 }
