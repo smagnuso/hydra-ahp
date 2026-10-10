@@ -212,7 +212,7 @@ describe("changesets", () => {
     const kept = state().files.find((file) => file.id === cwdToUri(join(cwd, "kept.txt")))?.edit;
     expect(kept?.diff).toEqual({ added: 1, removed: 1 });
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: kept?.before?.content.uri } as never)) as unknown as { data: string };
-    expect(before.data).toBe("before\n");
+    expect(before.data).toBe("// Recorded edit 1\nbefore\n");
     expect(state().files.find((file) => file.id === cwdToUri(join(cwd, "new.txt")))?.edit.before).toBeUndefined();
 
     const diffs = state().files.map((file) => (file.edit as { diff?: { added?: number; removed?: number } }).diff ?? {});
@@ -247,7 +247,7 @@ describe("changesets", () => {
     expect(state().files.map((file) => file.id)).toContain(otherFile);
     const otherEdit = state().files.find((file) => file.id === otherFile)?.edit;
     const before = (await session.client.request("resourceRead", { channel: "ahp-root://", uri: otherEdit?.before?.content.uri } as never)) as unknown as { data: string };
-    expect(before.data).toBe("before\n");
+    expect(before.data).toBe("// Recorded edit 1\nbefore\n");
     expect(otherEdit?.diff).toEqual({ added: 1, removed: 1 });
     const sessionState = (): SessionState => harness?.core.store.state(SESSION) as SessionState;
     for (let tries = 0; tries < 100 && !sessionState().workingDirectories?.includes(cwdToUri(otherDir)); tries += 1) {
@@ -279,13 +279,13 @@ describe("changesets", () => {
       await sleep(20);
     }
     const fileUri = cwdToUri(path);
-    expect(state().files.map((file) => file.id)).toEqual([fileUri, `${fileUri}#ahp-hunk-1`]);
-    const sides = await Promise.all(state().files.map(async (file) => {
-      const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file.edit.before?.content.uri } as never) as unknown as { data: string };
-      const after = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file.edit.after?.content.uri } as never) as unknown as { data: string };
-      return [before.data, after.data];
-    }));
-    expect(sides).toEqual([["/core", "/ore"], ["/ore", "/core"]]);
+    expect(state().files.map((file) => file.id)).toEqual([fileUri]);
+    const file = state().files[0];
+    expect(file?.edit.diff).toEqual({ added: 2, removed: 2 });
+    const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.before?.content.uri } as never) as unknown as { data: string };
+    const after = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.after?.content.uri } as never) as unknown as { data: string };
+    expect(before.data).toBe("// Recorded edit 1\n/core\n// Recorded edit 2\n/ore");
+    expect(after.data).toBe("// Recorded edit 1\n/ore\n// Recorded edit 2\n/core");
     const listed = (await session.client.request("listSessions", {} as never)) as unknown as { items: { resource: string; changes?: unknown }[] };
     expect(listed.items.find((item) => item.resource === SESSION)?.changes).toEqual({ additions: 2, deletions: 2, files: 1 });
   });

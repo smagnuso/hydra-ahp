@@ -290,9 +290,7 @@ export class ChangesetService {
     await this.readEdits(watched, cwd);
     const directories = [...new Set([...watched.edited.keys()].map(dirname).filter((directory) => directory !== cwd))];
     this.options.onWorkdirs?.(watched.sessionUri, directories);
-    return [...watched.edited.values()].flatMap((edit) =>
-      edit.hunks.map((hunk, index) => this.toSessionChangesetFile(uri, edit, hunk, index)),
-    );
+    return [...watched.edited.values()].map((edit) => this.toSessionChangesetFile(uri, edit));
   }
 
   private async readEdits(watched: Watched, cwd: string): Promise<void> {
@@ -316,24 +314,23 @@ export class ChangesetService {
     watched.edited = edited;
   }
 
-  private toSessionChangesetFile(
-    uri: string,
-    file: SessionEdit,
-    hunk: SessionEdit["hunks"][number],
-    index: number,
-  ): ChangesetFile {
+  private toSessionChangesetFile(uri: string, file: SessionEdit): ChangesetFile {
     const fileUri = cwdToUri(file.path);
-    const created = index === 0 && (file.created ?? hunk.oldText === "");
-    const beforeUri = editContentUri(uri, fileUri, index, "before");
-    const afterUri = editContentUri(uri, fileUri, index, "after");
-    this.rememberEditContent(watchedSessionUri(uri), beforeUri, hunk.oldText);
-    this.rememberEditContent(watchedSessionUri(uri), afterUri, hunk.newText);
+    const created = file.created ?? file.hunks[0]?.oldText === "";
+    const beforeUri = editContentUri(uri, fileUri, "before");
+    const afterUri = editContentUri(uri, fileUri, "after");
+    const beforeText = recordedEditText(file.hunks, "oldText");
+    const afterText = recordedEditText(file.hunks, "newText");
+    this.rememberEditContent(watchedSessionUri(uri), beforeUri, beforeText);
+    this.rememberEditContent(watchedSessionUri(uri), afterUri, afterText);
+    const added = file.hunks.reduce((total, hunk) => total + lineCount(hunk.newText), 0);
+    const removed = file.hunks.reduce((total, hunk) => total + lineCount(hunk.oldText), 0);
     return {
-      id: index === 0 ? fileUri : `${fileUri}#ahp-hunk-${index}`,
+      id: fileUri,
       edit: {
         ...(!created ? { before: { uri: fileUri, content: { uri: beforeUri } } } : {}),
         after: { uri: fileUri, content: { uri: afterUri } },
-        diff: { added: lineCount(hunk.newText), removed: lineCount(hunk.oldText) },
+        diff: { added, removed },
       },
     } as ChangesetFile;
   }
@@ -484,14 +481,12 @@ function unsafeSegment(segment: string): boolean {
 function totalsOf(files: ChangesetFile[]): { additions: number; deletions: number; files: number } {
   let additions = 0;
   let deletions = 0;
-  const fileIds = new Set<string>();
   for (const file of files) {
-    fileIds.add(file.id.replace(/#ahp-hunk-\d+$/, ""));
     const diff = (file.edit as { diff?: { added?: number; removed?: number } }).diff;
     additions += diff?.added ?? 0;
     deletions += diff?.removed ?? 0;
   }
-  return { additions, deletions, files: fileIds.size };
+  return { additions, deletions, files: files.length };
 }
 
 // VS Code labels a diff side by its content URI's path, so that is the file's own path; what git needs rides in the query.
@@ -514,9 +509,13 @@ function revisionQuery(uri: string): URLSearchParams {
   }
 }
 
-function editContentUri(changesetUri: string, fileUri: string, index: number, side: "before" | "after"): string {
-  const id = Buffer.from(JSON.stringify([changesetUri, fileUri, index, side])).toString("base64url");
+function editContentUri(changesetUri: string, fileUri: string, side: "before" | "after"): string {
+  const id = Buffer.from(JSON.stringify([changesetUri, fileUri, side])).toString("base64url");
   return `${EDIT_SCHEME}${id}`;
+}
+
+function recordedEditText(hunks: SessionEdit["hunks"], side: "oldText" | "newText"): string {
+  return hunks.map((hunk, index) => `// Recorded edit ${index + 1}\n${hunk[side]}`).join("\n");
 }
 
 function watchedSessionUri(uri: string): string {
