@@ -178,8 +178,12 @@ describe("changesets", () => {
 
     const reopened = await session.client.subscribe(SESSION_CHANGES);
     const reopenedState = reopened.result.snapshot?.state as ChangesetState | undefined;
-    expect(reopenedState?.status).toBe("ready");
-    expect(reopenedState?.files.map((file) => file.id)).toEqual([cwdToUri(join(cwd, "later.txt"))]);
+    expect(reopenedState?.status).toBe("computing");
+    for (let tries = 0; tries < 100 && state()?.status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    expect(state()?.status).toBe("ready");
+    expect(state()?.files.map((file) => file.id)).toEqual([cwdToUri(join(cwd, "later.txt"))]);
   });
 
   it("uses the recorded edits even after their files are committed", async () => {
@@ -259,6 +263,7 @@ describe("changesets", () => {
   it("serves recorded session hunks outside a Git repository", async () => {
     dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
     const path = join(dir, "file.txt");
+    writeFileSync(path, "new line\n");
     harness = await startBridgeHarness((hydra) => {
       hydra.rows = [ROW({ cwd: dir })];
       hydra.edited.set("h1", [{
@@ -285,7 +290,7 @@ describe("changesets", () => {
     const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.before?.content.uri } as never) as unknown as { data: string };
     const after = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.after?.content.uri } as never) as unknown as { data: string };
     expect(before.data).toBe("// Recorded edit 1\n/core\n// Recorded edit 2\n/ore");
-    expect(after.data).toBe("// Recorded edit 1\n/ore\n// Recorded edit 2\n/core");
+    expect(after.data).toBe("new line\n");
     const listed = (await session.client.request("listSessions", {} as never)) as unknown as { items: { resource: string; changes?: unknown }[] };
     expect(listed.items.find((item) => item.resource === SESSION)?.changes).toEqual({ additions: 2, deletions: 2, files: 1 });
   });

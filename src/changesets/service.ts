@@ -1,4 +1,5 @@
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { stat } from "node:fs/promises";
 import type { Changeset, ChangesetFile, ChangesetState } from "@microsoft/agent-host-protocol";
 import { cwdToUri } from "../bridge/ids.js";
 import type { ProtocolCore } from "../protocol/core.js";
@@ -290,7 +291,7 @@ export class ChangesetService {
     await this.readEdits(watched, cwd);
     const directories = [...new Set([...watched.edited.keys()].map(dirname).filter((directory) => directory !== cwd))];
     this.options.onWorkdirs?.(watched.sessionUri, directories);
-    return [...watched.edited.values()].map((edit) => this.toSessionChangesetFile(uri, edit));
+    return Promise.all([...watched.edited.values()].map((edit) => this.toSessionChangesetFile(uri, edit)));
   }
 
   private async readEdits(watched: Watched, cwd: string): Promise<void> {
@@ -314,15 +315,24 @@ export class ChangesetService {
     watched.edited = edited;
   }
 
-  private toSessionChangesetFile(uri: string, file: SessionEdit): ChangesetFile {
+  private async toSessionChangesetFile(uri: string, file: SessionEdit): Promise<ChangesetFile> {
     const fileUri = cwdToUri(file.path);
     const created = file.created ?? file.hunks[0]?.oldText === "";
     const beforeUri = editContentUri(uri, fileUri, "before");
-    const afterUri = editContentUri(uri, fileUri, "after");
+    let afterUri = fileUri;
     const beforeText = recordedEditText(file.hunks, "oldText");
     const afterText = recordedEditText(file.hunks, "newText");
     this.rememberEditContent(watchedSessionUri(uri), beforeUri, beforeText);
-    this.rememberEditContent(watchedSessionUri(uri), afterUri, afterText);
+    try {
+      if (!(await stat(file.path)).isFile()) {
+        afterUri = editContentUri(uri, fileUri, "after");
+      }
+    } catch {
+      afterUri = editContentUri(uri, fileUri, "after");
+    }
+    if (afterUri !== fileUri) {
+      this.rememberEditContent(watchedSessionUri(uri), afterUri, afterText);
+    }
     const added = file.hunks.reduce((total, hunk) => total + lineCount(hunk.newText), 0);
     const removed = file.hunks.reduce((total, hunk) => total + lineCount(hunk.oldText), 0);
     return {
