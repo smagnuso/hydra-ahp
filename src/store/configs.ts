@@ -11,15 +11,16 @@ export class ConfigStore {
   }
 
   get(agentId: string): ConfigOption[] {
-    return this.configs.get(agentId) ?? [];
+    return (this.configs.get(agentId) ?? []).map((option) => pinAgent(agentId, option));
   }
 
   // Returns whether the stored set changed; an empty set never replaces a known one.
   set(agentId: string, options: readonly ConfigOption[]): boolean {
-    if (options.length === 0 || JSON.stringify(this.get(agentId)) === JSON.stringify(options)) {
+    const pinned = options.map((option) => pinAgent(agentId, option));
+    if (pinned.length === 0 || JSON.stringify(this.get(agentId)) === JSON.stringify(pinned)) {
       return false;
     }
-    this.configs.set(agentId, [...options]);
+    this.configs.set(agentId, pinned);
     this.save();
     return true;
   }
@@ -50,4 +51,9 @@ export class ConfigStore {
     writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.configs), null, 2), { mode: 0o600 });
     renameSync(tmp, this.path);
   }
+}
+
+// A session reports the agent it runs now, which after a switch is not the agent whose set this is; a new session of this agent starts on it.
+function pinAgent(agentId: string, option: ConfigOption): ConfigOption {
+  return option.id === "agent" ? { ...option, currentValue: agentId } : option;
 }
