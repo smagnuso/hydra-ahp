@@ -28,6 +28,7 @@ const SETTLE_WAIT_MS = 500;
 const ECHO_WAIT_MS = 5_000;
 const STEER_RETRY_MS = 500;
 const RELEASE_HELD_MS = 200;
+const ORPHAN_SETTLE_MS = 1500;
 
 // A prompt this bridge sent to Hydra. Hydra never echoes its own prompt_received or turn_complete to the sender.
 interface OwnEntry {
@@ -170,6 +171,7 @@ export class SessionBridge implements SessionListener {
   private sawClosed = false;
   private chain: Promise<unknown> = Promise.resolve();
   private releaseTimer: ReturnType<typeof setTimeout> | undefined;
+  private orphanTimer: ReturnType<typeof setTimeout> | undefined;
   private fetching: Promise<void> | undefined;
   private disposed = false;
   private clientId: string | undefined;
@@ -258,6 +260,7 @@ export class SessionBridge implements SessionListener {
 
   dispose(): Promise<void> {
     clearTimeout(this.releaseTimer);
+    clearTimeout(this.orphanTimer);
     this.releaseSteerHold();
     this.disposed = true;
     return this.serial(async () => {
@@ -623,6 +626,37 @@ export class SessionBridge implements SessionListener {
     }
     sink(this.mapper.map(frame));
     this.maybeSteer();
+    this.armOrphanSettle();
+  }
+
+  // Hydra's own notices (an agent switch, say) arrive outside any turn and never get an end; close the turn they opened once Hydra is idle.
+  private armOrphanSettle(): void {
+    clearTimeout(this.orphanTimer);
+    this.orphanTimer = undefined;
+    const turnId = this.mapper.activeTurnId;
+    if (!turnId?.startsWith("orphan-")) {
+      return;
+    }
+    this.orphanTimer = setTimeout(() => {
+      this.orphanTimer = undefined;
+      void this.settleOrphan(turnId);
+    }, ORPHAN_SETTLE_MS);
+    this.orphanTimer.unref?.();
+  }
+
+  private async settleOrphan(turnId: string): Promise<void> {
+    if (this.disposed || this.buffering || this.mapper.activeTurnId !== turnId) {
+      return;
+    }
+    const busy = await this.deps.rest.getSession(this.deps.hydraId).then((entry) => entry.busy === true, () => true);
+    if (this.disposed || this.mapper.activeTurnId !== turnId) {
+      return;
+    }
+    if (busy) {
+      this.armOrphanSettle();
+      return;
+    }
+    this.publish(this.mapper.closeActive("end_turn", Date.now()));
   }
 
   // Keeps the session's settings in step with what Hydra reports; only the default chat speaks for the session.
