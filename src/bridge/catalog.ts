@@ -574,6 +574,9 @@ export class Catalog {
   // Diffs the listed set against what clients were last told and emits the root notifications.
   private reconcile(): void {
     this.rebuildIndex();
+    if (this.followAgents()) {
+      this.rebuildIndex();
+    }
     const next = new Map<string, SessionSummary>();
     for (const [uri, ids] of this.groups) {
       const members: GroupMember[] = ids.map((id) => ({
@@ -630,6 +633,31 @@ export class Catalog {
     for (const listener of this.changeListeners) {
       listener();
     }
+  }
+
+  // VS Code reads a session's agent from its URI scheme, so a session whose agent was switched moves to the new agent's URI.
+  private followAgents(): boolean {
+    let moved = false;
+    for (const [uri, ids] of [...this.groups]) {
+      const lead = this.entries.get(ids[0] as string);
+      const agent = lead?.agentId;
+      const scheme = uri.slice(0, uri.indexOf(":"));
+      if (!lead || !agent || isFederatedId(lead.sessionId) || scheme === agent || !this.hasAgent(scheme)) {
+        continue;
+      }
+      const next = providerSessionUri(agent, uri.slice(uri.indexOf(":/") + 2));
+      if (next === uri || this.groups.has(next)) {
+        continue;
+      }
+      for (const id of ids) {
+        this.stamps.set(id, next);
+        if (!isFederatedId(id)) {
+          void this.extState.set(id, AHP_URI_KEY, next).catch(() => undefined);
+        }
+      }
+      moved = true;
+    }
+    return moved;
   }
 
   // An open session channel keeps its working directory in step: the agent was respawned elsewhere, so the held slot is replaced.
