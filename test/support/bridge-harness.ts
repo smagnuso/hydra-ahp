@@ -3,6 +3,7 @@ import { ChangesetService } from "../../src/changesets/service.js";
 import { FlagStore } from "../../src/store/flags.js";
 import { ModelStore } from "../../src/store/models.js";
 import type { ConfigStore } from "../../src/store/configs.js";
+import type { ModelOptionStore } from "../../src/store/model-options.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Catalog } from "../../src/bridge/catalog.js";
@@ -108,6 +109,13 @@ export class FakeHydra {
         throw this.modelFailure;
       }
     },
+    setConfigOption: async (id: string, configId: string, value: string): Promise<unknown> => {
+      this.writes.push({ method: "session/set_config_option", id, params: [configId, value] });
+      this.configOptions = (Array.isArray(this.configOptions) ? this.configOptions : []).map((option) =>
+        (option as { id?: string }).id === configId ? { ...(option as object), currentValue: value } : option,
+      );
+      return this.configOptions;
+    },
     delete: async (id: string): Promise<void> => {
       this.writes.push({ method: "session/delete", id });
     },
@@ -184,16 +192,16 @@ export const ROW = (overrides: Partial<HydraSessionEntry> = {}): HydraSessionEnt
 
 export async function startBridgeHarness(
   setup: (hydra: FakeHydra) => void = () => undefined,
-  options: { permissionDelayMs?: number; models?: ModelStore; flags?: FlagStore; configs?: ConfigStore; changesetPollMs?: number; showImported?: boolean } = {},
+  options: { permissionDelayMs?: number; models?: ModelStore; flags?: FlagStore; configs?: ConfigStore; modelOptions?: ModelOptionStore; changesetPollMs?: number; showImported?: boolean } = {},
 ): Promise<BridgeHarness> {
   const hydra = new FakeHydra();
   hydra.rows = [ROW()];
   setup(hydra);
   const dir = mkdtempSync(join(tmpdir(), "ahp-bridge-"));
   const tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
-  const { models, flags, configs, changesetPollMs, showImported, ...backendOptions } = options;
+  const { models, flags, configs, modelOptions, changesetPollMs, showImported, ...backendOptions } = options;
   const withChangesets = changesetPollMs !== undefined;
-  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}), ...(flags ? { flags } : {}), ...(configs ? { configs } : {}), ...(showImported !== undefined ? { showImported } : {}), changesets: withChangesets });
+  const catalog = new Catalog({ rest: hydra.rest, extState: hydra.extState, pollMs: 40, warmPollMs: 40, ...(models ? { models } : {}), ...(flags ? { flags } : {}), ...(configs ? { configs } : {}), ...(modelOptions ? { modelOptions } : {}), ...(showImported !== undefined ? { showImported } : {}), changesets: withChangesets });
   const changesets = withChangesets
     ? new ChangesetService({
         cwdOf: (uri) => catalog.localCwdOf(uri),

@@ -1,4 +1,4 @@
-import type { SessionConfigState } from "@microsoft/agent-host-protocol";
+import type { ConfigSchema, SessionConfigState } from "@microsoft/agent-host-protocol";
 import { bag, text, type Json } from "./turns.js";
 
 export interface ConfigChoice {
@@ -64,9 +64,48 @@ export function parseConfigOptions(raw: unknown): ConfigOption[] {
   return out;
 }
 
-// The settings a client can show: everything but the model, including Hydra's agent switch.
+// Effort-like options change their choices with the model, and a session's settings schema is fixed once built,
+// so they travel with the model instead (AHP's per-model configSchema, answered through the message's model.config).
+const MODEL_BOUND = /effort|thought|reasoning|thinking/i;
+
+export function isModelBound(optionId: string): boolean {
+  return MODEL_BOUND.test(optionId);
+}
+
+export function modelBoundOf(options: readonly ConfigOption[]): ConfigOption[] {
+  return options.filter((option) => isModelBound(option.id));
+}
+
+// The settings a client can show: everything but the model and what rides with it, including Hydra's agent switch.
 export function settingsOf(options: readonly ConfigOption[]): ConfigOption[] {
-  return options.filter((option) => !OWN_PICKER_IDS.has(option.id));
+  return options.filter((option) => !OWN_PICKER_IDS.has(option.id) && !isModelBound(option.id));
+}
+
+// The configSchema of one model: its effort-like options, keyed by Hydra's option id.
+export function toModelConfigSchema(options: readonly ConfigOption[]): ConfigSchema | undefined {
+  const bound = modelBoundOf(options);
+  if (bound.length === 0) {
+    return undefined;
+  }
+  const properties: Record<string, Json> = {};
+  for (const option of bound) {
+    const described = option.options.some((choice) => choice.description !== undefined);
+    properties[option.id] = {
+      type: "string",
+      title: option.name,
+      ...(option.description ? { description: option.description } : {}),
+      enum: option.options.map((choice) => choice.value),
+      enumLabels: option.options.map((choice) => choice.name),
+      ...(described ? { enumDescriptions: option.options.map((choice) => choice.description ?? "") } : {}),
+      default: option.currentValue,
+    };
+  }
+  return { type: "object", properties } as unknown as ConfigSchema;
+}
+
+// What a message's model.config carries for a session: the current value of each effort-like option.
+export function modelConfigOf(options: readonly ConfigOption[]): Record<string, string> {
+  return Object.fromEntries(modelBoundOf(options).map((option) => [option.id, option.currentValue]));
 }
 
 export function toConfigState(options: readonly ConfigOption[]): SessionConfigState | undefined {

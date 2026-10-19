@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConfigStore } from "../src/store/configs.js";
 import type { SessionState } from "@microsoft/agent-host-protocol";
-import { optionIdOf, parseConfigOptions, propertyId, toConfigState } from "../src/bridge/config.js";
+import { isModelBound, optionIdOf, parseConfigOptions, propertyId, settingsOf, toConfigState, toModelConfigSchema } from "../src/bridge/config.js";
 import { ROW, startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 import { sessionOf } from "./support/chat-uri.js";
 
 const effort = {
-  id: "effort",
+  id: "tone",
   name: "Effort",
   type: "select",
   currentValue: "high",
@@ -20,9 +20,9 @@ describe("parseConfigOptions", () => {
   it("reads select options and flattens grouped ones", () => {
     const parsed = parseConfigOptions([
       effort,
-      { id: "tone", name: "Tone", currentValue: "dry", options: [{ group: "g", name: "G", options: [{ value: "dry" }, { value: "wet", name: "Wet" }] }] },
+      { id: "style", name: "Style", currentValue: "dry", options: [{ group: "g", name: "G", options: [{ value: "dry" }, { value: "wet", name: "Wet" }] }] },
     ]);
-    expect(parsed.map((option) => option.id)).toEqual(["effort", "tone"]);
+    expect(parsed.map((option) => option.id)).toEqual(["tone", "style"]);
     expect(parsed[1]?.options).toEqual([{ value: "dry", name: "dry" }, { value: "wet", name: "Wet" }]);
   });
 
@@ -35,8 +35,8 @@ describe("parseConfigOptions", () => {
 describe("toConfigState", () => {
   it("namespaces the ids and describes each option as a mutable string setting", () => {
     const state = toConfigState(parseConfigOptions([effort]));
-    expect(state?.values).toEqual({ "acp.effort": "high" });
-    expect(state?.schema.properties["acp.effort"]).toEqual({
+    expect(state?.values).toEqual({ "acp.tone": "high" });
+    expect(state?.schema.properties["acp.tone"]).toEqual({
       type: "string",
       title: "Effort",
       enum: ["low", "high"],
@@ -51,11 +51,11 @@ describe("toConfigState", () => {
     const model = { ...effort, id: "model" };
     const agent = { ...effort, id: "agent" };
     expect(toConfigState(parseConfigOptions([model]))).toBeUndefined();
-    expect(Object.keys(toConfigState(parseConfigOptions([model, agent, effort]))?.schema.properties ?? {})).toEqual(["acp.agent", "acp.effort"]);
+    expect(Object.keys(toConfigState(parseConfigOptions([model, agent, effort]))?.schema.properties ?? {})).toEqual(["acp.agent", "acp.tone"]);
   });
 
   it("maps property ids back to Hydra's option ids", () => {
-    expect(optionIdOf(propertyId("effort"))).toBe("effort");
+    expect(optionIdOf(propertyId("tone"))).toBe("tone");
     expect(optionIdOf("mode")).toBeUndefined();
   });
 });
@@ -87,7 +87,7 @@ describe("cached session config", () => {
     await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
     await session.client.subscribe(sessionUri);
     const state = (): SessionState => harness?.core.store.state(sessionUri) as SessionState;
-    expect(state().config?.values).toEqual({ "acp.mode": "default", "acp.agent": "claude-personal", "acp.effort": "low" });
+    expect(state().config?.values).toEqual({ "acp.mode": "default", "acp.agent": "claude-personal", "acp.tone": "low" });
 
     harness.hydra.listener?.update({
       update: {
@@ -99,6 +99,28 @@ describe("cached session config", () => {
         ],
       },
     });
-    expect(state().config?.values).toEqual({ "acp.mode": "plan", "acp.agent": "claude-personal", "acp.effort": "high" });
+    expect(state().config?.values).toEqual({ "acp.mode": "plan", "acp.agent": "claude-personal", "acp.tone": "high" });
+  });
+});
+
+describe("model-bound options", () => {
+  const options = parseConfigOptions([
+    { id: "model", name: "Model", currentValue: "a", options: [{ value: "a" }] },
+    { id: "mode", name: "Mode", currentValue: "build", options: [{ value: "build" }] },
+    { id: "reasoning_effort", name: "Reasoning", currentValue: "low", options: [{ value: "low" }, { value: "high", name: "High" }] },
+    { id: "thought_level", name: "Thought", currentValue: "off", options: [{ value: "off" }] },
+  ]);
+
+  it("recognises effort-like ids", () => {
+    expect(["effort", "thought_level", "reasoning_effort", "thinking"].every(isModelBound)).toBe(true);
+    expect(["mode", "agent", "model", "fast-mode"].some(isModelBound)).toBe(false);
+  });
+
+  it("keeps them out of the session's settings and puts them on the model's schema", () => {
+    expect(settingsOf(options).map((option) => option.id)).toEqual(["mode"]);
+    const schema = toModelConfigSchema(options) as { properties: Record<string, { enum: string[]; default: string }> };
+    expect(Object.keys(schema.properties)).toEqual(["reasoning_effort", "thought_level"]);
+    expect(schema.properties.reasoning_effort).toMatchObject({ enum: ["low", "high"], default: "low" });
+    expect(toModelConfigSchema(parseConfigOptions([options[1]]))).toBeUndefined();
   });
 });

@@ -7,6 +7,7 @@ import { ChangesetService } from "./changesets/service.js";
 import { FlagStore } from "./store/flags.js";
 import { TerminalService } from "./terminals/service.js";
 import { removeEndpoint, writeEndpoint } from "./store/endpoint.js";
+import { ModelOptionStore } from "./store/model-options.js";
 import { ConfigStore } from "./store/configs.js";
 import { ModelStore } from "./store/models.js";
 import { TokenRegistry } from "./store/tokens.js";
@@ -88,6 +89,7 @@ export async function startApp(initial: Config, version: string): Promise<App> {
     flags: new FlagStore(config.flagsPath),
     models: new ModelStore(config.modelsPath),
     configs: new ConfigStore(config.configsPath),
+    modelOptions: new ModelOptionStore(config.modelOptionsPath),
     ...(config.pollMs !== undefined ? { pollMs: config.pollMs } : {}),
     ...(config.warmPollMs !== undefined ? { warmPollMs: config.warmPollMs } : {}),
     showImported: config.showImported,

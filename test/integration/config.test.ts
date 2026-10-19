@@ -58,9 +58,9 @@ describe("an agent's config options as session settings against a scratch daemon
   it("lists the agent's options as mutable settings with their current values", async () => {
     const { uri } = await prompted("fake-config");
     const config = await configOf(uri);
-    expect(config?.values).toEqual({ "acp.agent": "fake-config", "acp.effort": "medium", "acp.fast": "off" });
-    expect(Object.keys(config?.schema.properties ?? {})).toEqual(["acp.agent", "acp.effort", "acp.fast"]);
-    expect(config?.schema.properties["acp.effort"]).toMatchObject({
+    expect(config?.values).toEqual({ "acp.agent": "fake-config", "acp.tone": "medium", "acp.fast": "off" });
+    expect(Object.keys(config?.schema.properties ?? {})).toEqual(["acp.agent", "acp.tone", "acp.fast"]);
+    expect(config?.schema.properties["acp.tone"]).toMatchObject({
       type: "string",
       title: "Effort",
       description: "How hard the agent thinks",
@@ -75,18 +75,18 @@ describe("an agent's config options as session settings against a scratch daemon
   it("applies a client's change through the agent and echoes it", async () => {
     const { id, uri } = await prompted("fake-config");
     await configOf(uri);
-    expect(await change(uri, { "acp.effort": "high" })).toBeUndefined();
-    await until("agent saw it", async () => ((await driver.agentLog(id)).includes("config:effort=high") ? true : undefined));
-    expect((await configOf(uri))?.values["acp.effort"]).toBe("high");
+    expect(await change(uri, { "acp.tone": "high" })).toBeUndefined();
+    await until("agent saw it", async () => ((await driver.agentLog(id)).includes("config:tone=high") ? true : undefined));
+    expect((await configOf(uri))?.values["acp.tone"]).toBe("high");
   });
 
   it("corrects the values when the agent reshapes another setting", async () => {
     const { uri } = await prompted("fake-config");
     await configOf(uri);
     expect(await change(uri, { "acp.fast": "on" })).toBeUndefined();
-    await until("effort dropped", async () => {
+    await until("tone dropped", async () => {
       const values = (await configOf(uri))?.values;
-      return values?.["acp.effort"] === "low" && values?.["acp.fast"] === "on" ? true : undefined;
+      return values?.["acp.tone"] === "low" && values?.["acp.fast"] === "on" ? true : undefined;
     });
   });
 
@@ -107,16 +107,16 @@ describe("an agent's config options as session settings against a scratch daemon
       20000,
     );
     const config = await configOf(moved);
-    expect(config?.values).toMatchObject({ "acp.agent": "fake-config", "acp.effort": "medium" });
+    expect(config?.values).toMatchObject({ "acp.agent": "fake-config", "acp.tone": "medium" });
   });
 
   it("refuses unknown settings, bad values and replacing them all", async () => {
     const { uri } = await prompted("fake-config");
     await configOf(uri);
     expect(await change(uri, { "acp.nope": "x" })).toMatch(/unknown setting/);
-    expect(await change(uri, { "acp.effort": "extreme" })).toMatch(/not a valid value/);
-    expect(await change(uri, { effort: "high" })).toMatch(/unknown setting/);
-    const { clientSeq } = ahp.session.client.dispatch(uri, act({ type: "session/configChanged", config: { "acp.effort": "low" }, replace: true }));
+    expect(await change(uri, { "acp.tone": "extreme" })).toMatch(/not a valid value/);
+    expect(await change(uri, { tone: "high" })).toMatch(/unknown setting/);
+    const { clientSeq } = ahp.session.client.dispatch(uri, act({ type: "session/configChanged", config: { "acp.tone": "low" }, replace: true }));
     expect((await ahp.session.waitFor((e) => e.origin?.clientSeq === clientSeq, 8000)).rejectionReason).toMatch(/one at a time/);
   });
 
@@ -124,10 +124,10 @@ describe("an agent's config options as session settings against a scratch daemon
     const offered = (await ahp.session.client.request("resolveSessionConfig", {
       channel: ROOT,
       provider: "fake-config",
-      config: { "acp.effort": "high", "acp.fast": "bogus" },
+      config: { "acp.tone": "high", "acp.fast": "bogus" },
     } as never)) as unknown as { schema: { properties: Record<string, unknown> }; values: Record<string, unknown> };
-    expect(Object.keys(offered.schema.properties)).toEqual(["acp.agent", "acp.effort", "acp.fast"]);
-    expect(offered.values).toMatchObject({ "acp.effort": "high", "acp.fast": "off" });
+    expect(Object.keys(offered.schema.properties)).toEqual(["acp.agent", "acp.tone", "acp.fast"]);
+    expect(offered.values).toMatchObject({ "acp.tone": "high", "acp.fast": "off" });
 
     const before = new Set((await daemon.admin.listSessions({ includeNonInteractive: true })).sessions.map((row) => row.sessionId));
     const channel = `fake-config:/0b8e6c55-3c1e-4d0a-8d57-5a0f2a3b7c22`;
@@ -135,13 +135,13 @@ describe("an agent's config options as session settings against a scratch daemon
       channel,
       provider: "fake-config",
       workingDirectories: [WORK_URI],
-      config: { "acp.effort": "high" },
+      config: { "acp.tone": "high" },
     } as never);
     const hydraId = await until("session created", async () => {
       const rows = (await daemon.admin.listSessions({ includeNonInteractive: true })).sessions;
       return rows.find((row) => row.agentId === "fake-config" && !before.has(row.sessionId))?.sessionId;
     });
     await driver.attach(hydraId);
-    await until("agent applied the pick", async () => ((await driver.agentLog(hydraId)).includes("config:effort=high") ? true : undefined));
+    await until("agent applied the pick", async () => ((await driver.agentLog(hydraId)).includes("config:tone=high") ? true : undefined));
   });
 });

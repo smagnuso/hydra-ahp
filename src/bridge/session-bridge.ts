@@ -10,7 +10,7 @@ import { logger } from "../util/log.js";
 import { sideChatOrigin, type Catalog } from "./catalog.js";
 import { ChatMapper, withModel, type Frame } from "./mapping.js";
 import { UnsupportedContent, chooseOption, confirmationOptions, imageSupport, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
-import { optionIdOf, parseConfigOptions, type ConfigOption } from "./config.js";
+import { isModelBound, modelConfigOf, optionIdOf, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
 import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, summaryToSessionState, withFlagBits } from "./summary.js";
 import { FileLinks } from "./file-links.js";
@@ -431,8 +431,9 @@ export class SessionBridge implements SessionListener {
       collect(this.mapper.map(frame));
     }
     // History does not record model switches, so only the latest replayed turn is stamped with the model in use now.
+    this.noteModelConfig(parseConfigOptions(configOptions));
     this.noteModel(text(meta.currentModel) ?? parseConfigOptions(configOptions).find((option) => option.id === "model")?.currentValue);
-    stampLatestTurn(produced, this.model);
+    stampLatestTurn(produced, this.model, this.modelConfig);
     this.buffering = undefined;
     for (const event of pending) {
       if (event.kind !== "permission") {
@@ -661,6 +662,7 @@ export class SessionBridge implements SessionListener {
 
   // Keeps the session's settings in step with what Hydra reports; only the default chat speaks for the session.
   private applyConfig(options: ConfigOption[]): void {
+    this.noteModelConfig(options);
     if (this.deps.catalog.noteConfig(this.deps.hydraId, options)) {
       this.syncConfigValues();
     }
@@ -1085,17 +1087,36 @@ export class SessionBridge implements SessionListener {
 
   // The model on a turn's message is applied with session/set_model before the prompt goes out.
   private async applyModel(content: unknown): Promise<string | undefined> {
-    const wanted = text(bag(bag(content).model).id);
-    if (!wanted || wanted === this.model) {
-      return undefined;
+    const selection = bag(bag(content).model);
+    const wanted = text(selection.id);
+    if (wanted && wanted !== this.model) {
+      try {
+        await this.deps.sessions.setModel(this.deps.hydraId, wanted);
+      } catch (err) {
+        return `the agent did not switch to model ${wanted}: ${message(err)}`;
+      }
+      this.noteModel(wanted);
     }
-    try {
-      await this.deps.sessions.setModel(this.deps.hydraId, wanted);
-    } catch (err) {
-      return `the agent did not switch to model ${wanted}: ${message(err)}`;
-    }
-    this.noteModel(wanted);
+    await this.applyModelConfig(bag(selection.config));
     return undefined;
+  }
+
+  // The model's own options (effort and the like) go to Hydra when they differ from what it reports.
+  private async applyModelConfig(wanted: Json): Promise<void> {
+    const { sessions, catalog, hydraId } = this.deps;
+    for (const [optionId, value] of Object.entries(wanted)) {
+      const known = isModelBound(optionId) ? catalog.configOptionsFor(hydraId).find((option) => option.id === optionId) : undefined;
+      if (!known || typeof value !== "string" || known.currentValue === value || !known.options.some((choice) => choice.value === value)) {
+        continue;
+      }
+      try {
+        const options = parseConfigOptions(await sessions.setConfigOption(hydraId, optionId, value));
+        catalog.noteConfig(hydraId, options);
+        this.noteModelConfig(options);
+      } catch (err) {
+        log.warn(`setting ${optionId}=${value} for ${hydraId} failed`, message(err));
+      }
+    }
   }
 
   private noteModel(model: string | undefined): void {
@@ -1103,6 +1124,13 @@ export class SessionBridge implements SessionListener {
       this.model = model;
       this.mapper.model = model;
     }
+  }
+
+  private modelConfig: Record<string, string> | undefined;
+
+  private noteModelConfig(options: readonly ConfigOption[]): void {
+    this.modelConfig = modelConfigOf(options);
+    this.mapper.modelConfig = this.modelConfig;
   }
 
   private send(entry: OwnEntry): void {
@@ -1701,10 +1729,10 @@ export class SessionBridge implements SessionListener {
   }
 }
 
-function stampLatestTurn(actions: Json[], model: string | undefined): void {
+function stampLatestTurn(actions: Json[], model: string | undefined, config?: Record<string, string>): void {
   const index = actions.findLastIndex((next) => next.type === "chat/turnStarted");
   if (index >= 0) {
     const started = actions[index] as Json;
-    actions[index] = { ...started, message: withModel(bag(started.message), model) };
+    actions[index] = { ...started, message: withModel(bag(started.message), model, config) };
   }
 }

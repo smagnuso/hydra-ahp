@@ -131,6 +131,23 @@ describe.each(["0.9.0", "1.0.0"])("write actions at %s", (version) => {
     expect(harness.hydra.writes.filter((write) => write.method === "session/set_model")).toHaveLength(1);
   });
 
+  it("applies the model's own options before the prompt and stamps them on the turn", async () => {
+    harness = await startBridgeHarness((hydra) => {
+      hydra.configOptions = [
+        { id: "model", name: "Model", currentValue: "fast", options: [{ value: "fast" }, { value: "slow" }] },
+        { id: "effort", name: "Effort", currentValue: "low", options: [{ value: "low" }, { value: "high" }] },
+      ];
+    });
+    const { session, oracle } = await open();
+    const echo = await dispatch(session, CHAT, turn("t1", { text: "hello", model: { id: "fast", config: { effort: "high" } } }));
+    expect(echo.rejectionReason).toBeUndefined();
+    expect(harness.hydra.writes.map((write) => [write.method, write.params])).toEqual([
+      ["session/set_config_option", ["effort", "high"]],
+      ["session/prompt", [{ type: "text", text: "hello" }]],
+    ]);
+    expect(chat(session, oracle).activeTurn?.id).toBe("t1");
+  });
+
   it("rejects a turn whose model the agent refuses, without prompting", async () => {
     harness = await startBridgeHarness((hydra) => {
       hydra.modelFailure = new Error("unknown model");

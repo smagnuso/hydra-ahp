@@ -24,16 +24,16 @@ let cancelHang;
 const nativeSteering = process.argv.includes("--steering");
 // --models advertises two models and records session/set_model calls.
 const withModels = process.argv.includes("--models");
-// --config advertises effort and fast options and records session/set_config_option calls; turning fast on drops effort to low.
+// --config advertises tone and fast options and records session/set_config_option calls; turning fast on drops tone to low.
 const withConfig = process.argv.includes("--config");
-const settings = { effort: "medium", fast: "off" };
+const settings = { tone: "medium", fast: "off" };
 const configOptions = () => [
   {
-    id: "effort",
+    id: "tone",
     name: "Effort",
     description: "How hard the agent thinks",
     type: "select",
-    currentValue: settings.effort,
+    currentValue: settings.tone,
     options: [
       { value: "low", name: "Low" },
       { value: "medium", name: "Medium", description: "The default" },
@@ -334,7 +334,7 @@ rl.on("line", (line) => {
     log.push(`config:${configId}=${value}`);
     settings[configId] = value;
     if (configId === "fast" && value === "on") {
-      settings.effort = "low";
+      settings.tone = "low";
     }
     send({ jsonrpc: "2.0", id: message.id, result: { configOptions: configOptions() } });
   } else if (message.method === "session/set_model") {

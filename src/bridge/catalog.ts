@@ -1,4 +1,4 @@
-import type { AgentInfo, Changeset, RootState, SessionConfigState, SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
+import type { AgentInfo, Changeset, ConfigSchema, RootState, SessionConfigState, SessionState, SessionSummary } from "@microsoft/agent-host-protocol";
 import { changesetsFor } from "../changesets/service.js";
 import { ROOT_URI } from "../protocol/channels.js";
 import type { ProtocolCore } from "../protocol/core.js";
@@ -10,7 +10,8 @@ import { chatKey, cwdToUri, defaultChatUri, isChatUri, isFederatedId, providerSe
 import { NO_FLAGS, patchedFlags, readFlags, sameFlags, type FlagStore, type SessionFlags } from "../store/flags.js";
 import type { ConfigStore } from "../store/configs.js";
 import type { KnownModel, ModelStore } from "../store/models.js";
-import { toConfigState, type ConfigOption } from "./config.js";
+import type { ModelOptionStore } from "../store/model-options.js";
+import { modelBoundOf, toConfigState, toModelConfigSchema, type ConfigOption } from "./config.js";
 import { groupToSummary, type GroupMember } from "./summary.js";
 
 const log = logger("catalog");
@@ -29,6 +30,7 @@ export interface CatalogOptions {
   flags?: FlagStore;
   models?: ModelStore;
   configs?: ConfigStore;
+  modelOptions?: ModelOptionStore;
   pollMs?: number;
   warmPollMs?: number;
   agentsEveryPolls?: number;
@@ -749,7 +751,9 @@ export class Catalog {
 
   private agentInfo(agent: HydraAgent, available: boolean): AgentInfo {
     const models = defaultFirst(this.options.models?.get(agent.id) ?? [], this.defaultModelOf(agent));
-    return toAgentInfo(agent, models, available);
+    // A model not seen running yet offers the effort-like options its agent showed last.
+    const fallback = this.options.configs?.get(agent.id) ?? [];
+    return toAgentInfo(agent, models, available, (modelId) => toModelConfigSchema(this.options.modelOptions?.get(agent.id, modelId) ?? fallback));
   }
 
   // VS Code picks the first model for a new session, so the one Hydra would seed it with goes first.
@@ -805,6 +809,11 @@ export class Catalog {
     const agentId = this.entries.get(hydraId)?.agentId;
     if (agentId) {
       this.options.configs?.set(agentId, options);
+      const model = options.find((option) => option.id === "model")?.currentValue;
+      const bound = modelBoundOf(options);
+      if (model && this.options.modelOptions?.set(agentId, model, bound) && this.ready) {
+        this.republishAgents();
+      }
     }
     if (JSON.stringify(this.liveConfigs.get(hydraId)) === JSON.stringify(options)) {
       return false;
@@ -932,7 +941,7 @@ function defaultFirst(models: readonly KnownModel[], model: string | undefined):
 // session on it reaches Hydra, which refuses with its own error.
 const UNAVAILABLE = "Not configured on this machine: existing sessions are readable, new ones will fail to start.";
 
-function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[], available = true): AgentInfo {
+function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[], available = true, schemaFor: (modelId: string) => ConfigSchema | undefined = () => undefined): AgentInfo {
   const description = agent.description ?? "";
   return {
     provider: agent.id,
@@ -943,6 +952,7 @@ function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[], available
       provider: agent.id,
       name: model.name,
       ...(model.vision === undefined ? {} : { supportsVision: model.vision }),
+      ...(schemaFor(model.id) ? { configSchema: schemaFor(model.id) } : {}),
     })),
     capabilities: { multipleChats: { fork: true, sideChat: true } },
   };
