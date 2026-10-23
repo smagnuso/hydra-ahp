@@ -12,6 +12,8 @@ export interface Call {
   input?: string;
   // Shown in the call's row in place of displayName.
   message?: { markdown: string };
+  // The message was worked out from the call's input, so a later input may replace it.
+  described?: boolean;
   readied: boolean;
   asked: boolean;
   finished: boolean;

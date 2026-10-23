@@ -230,6 +230,49 @@ function todosOf(update: Json): Json[] | undefined {
   return Array.isArray(todos) ? todos : undefined;
 }
 
+const BARE_TOOL_NAME = /^[A-Za-z_][\w-]*$/;
+const LABEL_MAX = 90;
+
+function inline(value: string): string {
+  const one = value.replace(/\s+/g, " ").trim().replace(/`/g, "'");
+  return `\`${one.length > LABEL_MAX ? `${one.slice(0, LABEL_MAX - 1)}…` : one}\``;
+}
+
+function shortPath(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return path.startsWith("/") && parts.length > 3 ? `…/${parts.slice(-3).join("/")}` : path;
+}
+
+// Some agents (opencode) name a call with just its tool ("grep") and send what it searches or reads only in a later
+// update, so the row would say nothing about the call; a title that already says more is left alone.
+function describeCall(call: Call, locations: unknown): string | undefined {
+  if (!BARE_TOOL_NAME.test(call.displayName) || call.kind === "execute") {
+    return undefined;
+  }
+  let input: Json = {};
+  try {
+    input = call.input === undefined ? {} : bag(JSON.parse(call.input));
+  } catch {
+    input = {};
+  }
+  const located = Array.isArray(locations) ? text(bag(locations[0]).path) : undefined;
+  const path = text(input.path) ?? text(input.filePath) ?? text(input.file_path) ?? located;
+  const target = text(input.pattern) ?? text(input.query) ?? text(input.regex) ?? text(input.url);
+  const parts = [call.displayName];
+  if (target) {
+    parts.push(inline(target));
+  }
+  if (path) {
+    parts.push(...(target && text(input.pattern) !== undefined ? ["in"] : []), inline(shortPath(path)));
+  }
+  const offset = typeof input.offset === "number" ? input.offset : undefined;
+  const limit = typeof input.limit === "number" ? input.limit : undefined;
+  if (!target && path && offset !== undefined && limit !== undefined) {
+    parts.push(`(lines ${offset} to ${offset + limit})`);
+  }
+  return parts.length > 1 ? parts.join(" ") : undefined;
+}
+
 const UNSOLICITED_LABEL = "The agent continued on its own";
 
 const PLAN_MARKS: Record<string, string> = { completed: "✓", in_progress: "▶", pending: "○" };
@@ -474,6 +517,7 @@ export class ChatMapper {
     if (call.input === undefined && toolCall.rawInput !== undefined) {
       call.input = JSON.stringify(toolCall.rawInput);
     }
+    this.describe(call, toolCall.locations);
     call.asked = true;
     const title = text(toolCall.title);
     const editBlock = this.editBlock(toolCallId);
@@ -486,7 +530,7 @@ export class ChatMapper {
       type: "chat/toolCallReady",
       turnId: turn.id,
       toolCallId,
-      invocationMessage: call.displayName,
+      invocationMessage: call.message ?? call.displayName,
       ...(title ? { confirmationTitle: title } : {}),
       ...(call.input === undefined ? {} : { toolInput: call.input }),
       ...intentionOf(call),
@@ -852,6 +896,7 @@ export class ChatMapper {
     if (arrived !== undefined) {
       call.input = arrived;
     }
+    this.describe(call, update.locations);
     const blocks = contentBlocks(update, this.editBlock(update.toolCallId as string), this.imageReader(update.toolCallId as string));
     if (blocks.length > 0) {
       call.content = blocks;
@@ -869,6 +914,17 @@ export class ChatMapper {
       actions.push(this.toolContent(turn, call));
     }
     return actions;
+  }
+
+  private describe(call: Call, locations: unknown): void {
+    if (call.message !== undefined && call.described !== true) {
+      return;
+    }
+    const markdown = describeCall(call, locations);
+    if (markdown !== undefined) {
+      call.message = { markdown };
+      call.described = true;
+    }
   }
 
   // A todowrite call becomes the turn's plan; its own updates are dropped, as they only repeat the list as JSON.
