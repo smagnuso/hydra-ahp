@@ -73,25 +73,56 @@ export function isModelBound(optionId: string): boolean {
   return MODEL_BOUND.test(optionId);
 }
 
+// The session mode rides with the model too: a window that draws no chips for session settings still draws the model's.
+function isCarried(optionId: string): boolean {
+  return isModelBound(optionId) || optionId === "mode";
+}
+
 export function modelBoundOf(options: readonly ConfigOption[]): ConfigOption[] {
-  return options.filter((option) => isModelBound(option.id));
+  return options.filter((option) => isCarried(option.id));
+}
+
+// VS Code's model picker has two slots for a model's options and only reads these keys: tier, thinking and effort for the
+// first, the context keys for the second. The mode takes the second slot; any other key is left out of the menu.
+export function modelConfigKey(optionId: string): string {
+  if (optionId === "mode") {
+    return "contextTier";
+  }
+  return /thought|thinking/i.test(optionId) ? "thinkingLevel" : "reasoningEffort";
+}
+
+// The model-bound options by the key they travel under; when two share a key, the first wins.
+function byModelKey(options: readonly ConfigOption[]): Map<string, ConfigOption> {
+  const keyed = new Map<string, ConfigOption>();
+  for (const option of modelBoundOf(options)) {
+    const key = modelConfigKey(option.id);
+    if (!keyed.has(key)) {
+      keyed.set(key, option);
+    }
+  }
+  return keyed;
+}
+
+// The Hydra option a model.config key from a client stands for.
+export function optionOfModelKey(options: readonly ConfigOption[], key: string): ConfigOption | undefined {
+  return byModelKey(options).get(key);
 }
 
 // The settings a client can show: everything but the model, the agent and what rides with the model.
 export function settingsOf(options: readonly ConfigOption[]): ConfigOption[] {
-  return options.filter((option) => !OWN_PICKER_IDS.has(option.id) && !isModelBound(option.id));
+  return options.filter((option) => !OWN_PICKER_IDS.has(option.id) && !isCarried(option.id));
 }
 
-// The configSchema of one model: its effort-like options, keyed by Hydra's option id.
+// The configSchema of one model: its effort-like options and the mode, under the keys VS Code's model picker knows.
 export function toModelConfigSchema(options: readonly ConfigOption[]): ConfigSchema | undefined {
-  const bound = modelBoundOf(options);
-  if (bound.length === 0) {
+  const bound = byModelKey(options);
+  if (bound.size === 0) {
     return undefined;
   }
   const properties: Record<string, Json> = {};
-  for (const option of bound) {
+  for (const [key, option] of bound) {
     const described = option.options.some((choice) => choice.description !== undefined);
-    properties[option.id] = {
+    properties[key] = {
       type: "string",
       title: option.name,
       ...(option.description ? { description: option.description } : {}),
@@ -106,7 +137,7 @@ export function toModelConfigSchema(options: readonly ConfigOption[]): ConfigSch
 
 // What a message's model.config carries for a session: the current value of each effort-like option.
 export function modelConfigOf(options: readonly ConfigOption[]): Record<string, string> {
-  return Object.fromEntries(modelBoundOf(options).map((option) => [option.id, option.currentValue]));
+  return Object.fromEntries([...byModelKey(options)].map(([key, option]) => [key, option.currentValue]));
 }
 
 export function toConfigState(options: readonly ConfigOption[]): SessionConfigState | undefined {

@@ -10,7 +10,7 @@ import { logger } from "../util/log.js";
 import { sideChatOrigin, type Catalog } from "./catalog.js";
 import { ChatMapper, withModel, type Frame } from "./mapping.js";
 import { UnsupportedContent, chooseOption, confirmationOptions, imageSupport, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
-import { isModelBound, modelConfigOf, optionIdOf, parseConfigOptions, type ConfigOption } from "./config.js";
+import { modelConfigOf, optionIdOf, optionOfModelKey, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
 import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, summaryToSessionState, withFlagBits } from "./summary.js";
 import { FileLinks } from "./file-links.js";
@@ -1104,17 +1104,17 @@ export class SessionBridge implements SessionListener {
   // The model's own options (effort and the like) go to Hydra when they differ from what it reports.
   private async applyModelConfig(wanted: Json): Promise<void> {
     const { sessions, catalog, hydraId } = this.deps;
-    for (const [optionId, value] of Object.entries(wanted)) {
-      const known = isModelBound(optionId) ? catalog.configOptionsFor(hydraId).find((option) => option.id === optionId) : undefined;
+    for (const [key, value] of Object.entries(wanted)) {
+      const known = optionOfModelKey(catalog.configOptionsFor(hydraId), key);
       if (!known || typeof value !== "string" || known.currentValue === value || !known.options.some((choice) => choice.value === value)) {
         continue;
       }
       try {
-        const options = parseConfigOptions(await sessions.setConfigOption(hydraId, optionId, value));
+        const options = parseConfigOptions(await sessions.setConfigOption(hydraId, known.id, value));
         catalog.noteConfig(hydraId, options);
         this.noteModelConfig(options);
       } catch (err) {
-        log.warn(`setting ${optionId}=${value} for ${hydraId} failed`, message(err));
+        log.warn(`setting ${known.id}=${value} for ${hydraId} failed`, message(err));
       }
     }
   }

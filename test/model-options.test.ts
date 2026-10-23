@@ -42,7 +42,7 @@ describe("model options in the agent list", () => {
     const root = (await session.client.request("subscribe", { channel: "ahp-root://" })) as { snapshot: { state: RootState } };
     const alpha = root.snapshot.state.agents.find((agent) => agent.provider === "alpha");
     const choices = (id: string) =>
-      (alpha?.models.find((model) => model.id === id)?.configSchema?.properties as Record<string, { enum: string[] }> | undefined)?.effort?.enum;
+      (alpha?.models.find((model) => model.id === id)?.configSchema?.properties as Record<string, { enum: string[] }> | undefined)?.reasoningEffort?.enum;
     expect(alpha?.displayName).toBe("Hydra · Alpha");
     expect(choices("seen")).toEqual(["off", "on"]);
     expect(choices("unseen")).toEqual(["low", "high"]);

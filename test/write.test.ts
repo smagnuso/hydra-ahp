@@ -139,13 +139,29 @@ describe.each(["0.9.0", "1.0.0"])("write actions at %s", (version) => {
       ];
     });
     const { session, oracle } = await open();
-    const echo = await dispatch(session, CHAT, turn("t1", { text: "hello", model: { id: "fast", config: { effort: "high" } } }));
+    const echo = await dispatch(session, CHAT, turn("t1", { text: "hello", model: { id: "fast", config: { reasoningEffort: "high" } } }));
     expect(echo.rejectionReason).toBeUndefined();
     expect(harness.hydra.writes.map((write) => [write.method, write.params])).toEqual([
       ["session/set_config_option", ["effort", "high"]],
       ["session/prompt", [{ type: "text", text: "hello" }]],
     ]);
     expect(chat(session, oracle).activeTurn?.id).toBe("t1");
+  });
+
+  it("applies the session mode a turn carries on its model", async () => {
+    harness = await startBridgeHarness((hydra) => {
+      hydra.configOptions = [
+        { id: "model", name: "Model", currentValue: "fast", options: [{ value: "fast" }, { value: "slow" }] },
+        { id: "mode", name: "Session Mode", currentValue: "build", options: [{ value: "build" }, { value: "plan" }] },
+      ];
+    });
+    const { session } = await open();
+    const echo = await dispatch(session, CHAT, turn("t1", { text: "hello", model: { id: "fast", config: { contextTier: "plan" } } }));
+    expect(echo.rejectionReason).toBeUndefined();
+    expect(harness.hydra.writes.map((write) => [write.method, write.params])).toEqual([
+      ["session/set_config_option", ["mode", "plan"]],
+      ["session/prompt", [{ type: "text", text: "hello" }]],
+    ]);
   });
 
   it("rejects a turn whose model the agent refuses, without prompting", async () => {

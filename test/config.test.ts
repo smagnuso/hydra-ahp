@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ConfigStore } from "../src/store/configs.js";
 import type { SessionState } from "@microsoft/agent-host-protocol";
-import { isModelBound, optionIdOf, parseConfigOptions, propertyId, settingsOf, toConfigState, toModelConfigSchema } from "../src/bridge/config.js";
+import { isModelBound, modelConfigKey, optionIdOf, optionOfModelKey, parseConfigOptions, propertyId, settingsOf, toConfigState, toModelConfigSchema } from "../src/bridge/config.js";
 import { ROW, startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 import { sessionOf } from "./support/chat-uri.js";
 
@@ -87,7 +87,7 @@ describe("cached session config", () => {
     await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
     await session.client.subscribe(sessionUri);
     const state = (): SessionState => harness?.core.store.state(sessionUri) as SessionState;
-    expect(state().config?.values).toEqual({ "acp.mode": "default", "acp.tone": "low" });
+    expect(state().config?.values).toEqual({ "acp.tone": "low" });
 
     harness.hydra.listener?.update({
       update: {
@@ -99,7 +99,7 @@ describe("cached session config", () => {
         ],
       },
     });
-    expect(state().config?.values).toEqual({ "acp.mode": "plan", "acp.tone": "high" });
+    expect(state().config?.values).toEqual({ "acp.tone": "high" });
   });
 });
 
@@ -111,16 +111,27 @@ describe("model-bound options", () => {
     { id: "thought_level", name: "Thought", currentValue: "off", options: [{ value: "off" }] },
   ]);
 
+  it("names each option by the key VS Code's model picker understands", () => {
+    expect(modelConfigKey("effort")).toBe("reasoningEffort");
+    expect(modelConfigKey("reasoning_effort")).toBe("reasoningEffort");
+    expect(modelConfigKey("thought_level")).toBe("thinkingLevel");
+    expect(optionOfModelKey(options, "thinkingLevel")?.id).toBe("thought_level");
+    expect(modelConfigKey("mode")).toBe("contextTier");
+    expect(optionOfModelKey(options, "contextTier")?.id).toBe("mode");
+    expect(optionOfModelKey(options, "effort")).toBeUndefined();
+  });
+
   it("recognises effort-like ids", () => {
     expect(["effort", "thought_level", "reasoning_effort", "thinking"].every(isModelBound)).toBe(true);
     expect(["mode", "agent", "model", "fast-mode"].some(isModelBound)).toBe(false);
   });
 
   it("keeps them out of the session's settings and puts them on the model's schema", () => {
-    expect(settingsOf(options).map((option) => option.id)).toEqual(["mode"]);
+    expect(settingsOf(options)).toEqual([]);
     const schema = toModelConfigSchema(options) as { properties: Record<string, { enum: string[]; default: string }> };
-    expect(Object.keys(schema.properties)).toEqual(["reasoning_effort", "thought_level"]);
-    expect(schema.properties.reasoning_effort).toMatchObject({ enum: ["low", "high"], default: "low" });
-    expect(toModelConfigSchema(parseConfigOptions([options[1]]))).toBeUndefined();
+    expect(Object.keys(schema.properties).sort()).toEqual(["contextTier", "reasoningEffort", "thinkingLevel"]);
+    expect(schema.properties.contextTier).toMatchObject({ enum: ["build"], default: "build" });
+    expect(schema.properties.reasoningEffort).toMatchObject({ enum: ["low", "high"], default: "low" });
+    expect(toModelConfigSchema(parseConfigOptions([{ id: "tone", name: "Tone", currentValue: "dry", options: [{ value: "dry" }] }]))).toBeUndefined();
   });
 });
