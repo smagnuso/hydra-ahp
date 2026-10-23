@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { applyDaemonListen, certExpiryNotice, certNames, fetchDaemonListen, isLoopbackHost, pickDisplayName, shadowedCertNotice } from "./hydra/daemon-listen.js";
 import { AhpListener } from "./server/listener.js";
-import { ChangesetService } from "./changesets/service.js";
+import { ChangesetService, type TurnFileEdit } from "./changesets/service.js";
 import { FlagStore } from "./store/flags.js";
 import { TerminalService } from "./terminals/service.js";
 import { removeEndpoint, writeEndpoint } from "./store/endpoint.js";
@@ -103,6 +103,7 @@ export async function startApp(initial: Config, version: string): Promise<App> {
     isCold: (uri) => catalog.isCold(uri),
     membersOf: (uri) => catalog.membersOf(uri),
     sessionEdits: (id) => rest.sessionDiff(id),
+    turnEdits: (uri, turnId): TurnFileEdit[] | undefined => backend.turnEdits(uri, turnId),
     onSessionTotals: (uri, totals) => catalog.noteChanges(uri, totals),
     onWorkdirs: (uri, directories) => catalog.noteWorkdirs(uri, directories),
   });

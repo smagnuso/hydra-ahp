@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
-import { ChangesetService } from "../../src/changesets/service.js";
+import { ChangesetService, type TurnFileEdit } from "../../src/changesets/service.js";
 import { FlagStore } from "../../src/store/flags.js";
 import { ModelStore } from "../../src/store/models.js";
 import type { ConfigStore } from "../../src/store/configs.js";
@@ -208,6 +208,7 @@ export async function startBridgeHarness(
         isCold: (uri) => catalog.isCold(uri),
         membersOf: (uri) => catalog.membersOf(uri),
         sessionEdits: (id) => hydra.rest.sessionDiff(id),
+        turnEdits: (uri, turnId): TurnFileEdit[] | undefined => backend.turnEdits(uri, turnId),
         onSessionTotals: (uri, totals) => catalog.noteChanges(uri, totals),
         onWorkdirs: (uri, directories) => catalog.noteWorkdirs(uri, directories),
         pollMs: changesetPollMs,

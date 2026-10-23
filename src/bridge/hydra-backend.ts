@@ -1,8 +1,10 @@
 import { homedir } from "node:os";
 import { EditContentStore, isEditContentUri } from "./edit-content.js";
 import type {
+  ChatState,
   ListSessionsParams,
   ListSessionsResult,
+  ResponsePart,
   SessionConfigState,
   SessionState,
 } from "@microsoft/agent-host-protocol";
@@ -13,7 +15,7 @@ import type { ExtensionState } from "../hydra/ext-state.js";
 import type { FileService } from "../files/service.js";
 import type { TerminalService } from "../terminals/service.js";
 import { ResourceWatchService } from "../files/watch.js";
-import type { ChangesetService } from "../changesets/service.js";
+import type { ChangesetService, TurnFileEdit } from "../changesets/service.js";
 import { isChangesetChannelUri, isResourceWatchUri, isTerminalUri } from "../protocol/channels.js";
 import { HydraHttpError, type HydraRest, type HydraSessionEntry } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
@@ -49,6 +51,31 @@ export interface HydraBackendOptions {
   changesets?: ChangesetService;
   watches?: ResourceWatchService;
   permissionDelayMs?: number;
+}
+
+// Every file edit the turn's tool calls completed, in order.
+function fileEditsOf(parts: readonly ResponsePart[]): TurnFileEdit[] {
+  const edits: TurnFileEdit[] = [];
+  for (const part of parts) {
+    if (part.kind !== "toolCall" || part.toolCall.status !== "completed") {
+      continue;
+    }
+    for (const block of part.toolCall.content ?? []) {
+      if (block.type !== "fileEdit") {
+        continue;
+      }
+      const fileUri = block.after?.uri ?? block.before?.uri;
+      if (fileUri) {
+        edits.push({
+          fileUri,
+          ...(block.before ? { before: block.before } : {}),
+          ...(block.after ? { after: block.after } : {}),
+          ...(block.diff ? { diff: block.diff } : {}),
+        } as TurnFileEdit);
+      }
+    }
+  }
+  return edits;
 }
 
 function message(err: unknown): string {
@@ -102,6 +129,18 @@ export class HydraBackend implements Backend {
       }
     });
     await this.catalog.start(core);
+  }
+
+  // The file edits in a turn of any of the session's chats, for its turn changeset; undefined when no chat holds the turn.
+  turnEdits(sessionUri: string, turnId: string): TurnFileEdit[] | undefined {
+    for (const hydraId of this.catalog.membersOf(sessionUri)) {
+      const chat = this.core.store.state(this.catalog.chatOf(hydraId)) as ChatState | undefined;
+      const turn = chat?.activeTurn?.id === turnId ? chat.activeTurn : chat?.turns.find((entry) => entry.id === turnId);
+      if (turn) {
+        return fileEditsOf(turn.responseParts);
+      }
+    }
+    return undefined;
   }
 
   async stop(): Promise<void> {

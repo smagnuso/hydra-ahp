@@ -9,14 +9,16 @@ import { contentAt, repoRoot, workingChanges, type ChangedFile } from "./git.js"
 
 const log = logger("changesets");
 
-type ChangesetId = "session" | "uncommitted";
+type ChangesetId = "session" | "uncommitted" | "turn";
 
 const SEGMENT = "/changeset/";
 const REV_SCHEME = "ahp-rev:";
 const EDIT_SCHEME = "ahp-changeset:";
-const CHANGESET_URI = /\/changeset\/(session|uncommitted)$/;
+const CHANGESET_URI = /\/changeset\/(session|uncommitted|turn\/[^/]+)$/;
 const REVISION = /^(HEAD|[0-9a-f]{40}|[0-9a-f]{64})$/;
 const POLL_MS = 2_000;
+// A changeset that keeps failing, such as a turn of a chat nobody has open, is retried less and less often.
+const MAX_BACKOFF_MS = 60_000;
 // Hydra walks a session's history to list its edits, so new ones are picked up less often than the tree is checked.
 const EDITS_EVERY_MS = 10_000;
 const NOT_FOUND = -32008;
@@ -27,8 +29,12 @@ const MAX_CACHED_REVISION_ENTRIES = 4096;
 const MAX_RECORDED_DIFF_BYTES = 256 * 1024;
 const MAX_RECORDED_DIFF_LINES = 1000;
 
-export function changesetUri(sessionUri: string, id: ChangesetId): string {
+export function changesetUri(sessionUri: string, id: "session" | "uncommitted"): string {
   return `${sessionUri}${SEGMENT}${id}`;
+}
+
+export function turnChangesetUri(sessionUri: string, turnId: string): string {
+  return `${sessionUri}${SEGMENT}turn/${encodeURIComponent(turnId)}`;
 }
 
 export function isChangesetUri(uri: string): boolean {
@@ -49,6 +55,12 @@ export function changesetsFor(sessionUri: string): Changeset[] {
       uriTemplate: changesetUri(sessionUri, "uncommitted"),
       changeKind: "uncommitted",
     },
+    {
+      label: "Turn Changes",
+      description: "File edits the agent made in a single turn",
+      uriTemplate: `${sessionUri}${SEGMENT}turn/{turnId}`,
+      changeKind: "turn",
+    },
   ];
 }
 
@@ -59,6 +71,8 @@ export interface ChangesetServiceOptions {
   membersOf: (sessionUri: string) => string[];
   // Per-file edit hunks recorded in each Hydra session's history.
   sessionEdits: (hydraId: string) => Promise<SessionEdit[]>;
+  // The file edits recorded in one turn of the session's chats; undefined when no chat holds that turn.
+  turnEdits?: (sessionUri: string, turnId: string) => TurnFileEdit[] | undefined;
   isCold?: (sessionUri: string) => boolean;
   // Receives the session changeset's line and file totals each time it is computed.
   onSessionTotals?: (sessionUri: string, totals: { additions: number; deletions: number; files: number }) => void;
@@ -66,6 +80,14 @@ export interface ChangesetServiceOptions {
   onWorkdirs?: (sessionUri: string, directories: string[]) => void;
   pollMs?: number;
   editsEveryMs?: number;
+}
+
+// One fileEdit block from a turn's tool results.
+export interface TurnFileEdit {
+  fileUri: string;
+  before?: { uri: string; content: unknown };
+  after?: { uri: string; content: unknown };
+  diff?: { added?: number; removed?: number };
 }
 
 export interface SessionEdit {
@@ -77,12 +99,14 @@ export interface SessionEdit {
 interface Watched {
   id: ChangesetId;
   sessionUri: string;
+  turnId?: string;
   files: Map<string, ChangesetFile>;
   timer?: NodeJS.Timeout;
   computing: boolean;
   stopped: boolean;
   edited: Map<string, SessionEdit>;
   editsReadAt: number;
+  failures: number;
 }
 
 interface CachedEditContent {
@@ -126,14 +150,17 @@ export class ChangesetService {
     if (cached !== undefined) {
       this.rememberSnapshot(uri, cached);
     }
+    const kind = (match[1] as string).startsWith("turn/") ? "turn" : (match[1] as ChangesetId);
     const watched: Watched = {
-      id: match[1] as ChangesetId,
+      id: kind,
       sessionUri,
+      ...(kind === "turn" ? { turnId: decodeTurnId((match[1] as string).slice("turn/".length)) } : {}),
       files: new Map((cached ?? []).map((file) => [file.id, file])),
       computing: false,
       stopped: false,
       edited: new Map(),
       editsReadAt: 0,
+      failures: 0,
     };
     this.watched.set(uri, watched);
     this.core.createChannel(uri, {
@@ -261,22 +288,29 @@ export class ChangesetService {
     watched.computing = true;
     try {
       const files = await this.compute(uri, watched);
+      watched.failures = 0;
       if (!watched.stopped) {
         this.apply(uri, watched, files);
       }
     } catch (err) {
-      log.debug(`computing ${uri} failed`, err instanceof Error ? err.message : err);
-      if (!watched.stopped) {
+      watched.failures += 1;
+      if (watched.failures === 1) {
+        log.debug(`computing ${uri} failed`, err instanceof Error ? err.message : err);
+      }
+      const held = this.core.store.state(uri) as ChangesetState | undefined;
+      if (!watched.stopped && held?.status !== "error") {
         this.publishStatus(uri, {
           status: "error",
-          error: { errorType: watched.id === "session" ? "history" : "git", message: err instanceof Error ? err.message : String(err) },
+          error: { errorType: watched.id === "uncommitted" ? "git" : "history", message: err instanceof Error ? err.message : String(err) },
         });
       }
     } finally {
       watched.computing = false;
     }
     if (!watched.stopped) {
-      watched.timer = setTimeout(() => void this.refresh(uri, watched), this.options.pollMs ?? POLL_MS);
+      const every = this.options.pollMs ?? POLL_MS;
+      const delay = watched.failures === 0 ? every : Math.min(every * 2 ** watched.failures, Math.max(MAX_BACKOFF_MS, every));
+      watched.timer = setTimeout(() => void this.refresh(uri, watched), delay);
       watched.timer.unref();
     }
   }
@@ -285,6 +319,13 @@ export class ChangesetService {
     const cwd = this.options.cwdOf(watched.sessionUri);
     if (!cwd) {
       return [];
+    }
+    if (watched.id === "turn") {
+      const edits = this.options.turnEdits?.(watched.sessionUri, watched.turnId ?? "");
+      if (!edits) {
+        throw new Error("that turn is not loaded");
+      }
+      return mergeTurnEdits(edits);
     }
     if (watched.id === "uncommitted") {
       const changes = await workingChanges(cwd);
@@ -487,6 +528,42 @@ export class ChangesetService {
 function sessionUriOfChangeset(uri: string): string | undefined {
   const match = CHANGESET_URI.exec(uri);
   return match ? uri.slice(0, match.index) : undefined;
+}
+
+function decodeTurnId(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+// A file edited more than once in a turn shows from its first before to its last after, with the line counts added up.
+function mergeTurnEdits(edits: readonly TurnFileEdit[]): ChangesetFile[] {
+  const merged = new Map<string, TurnFileEdit>();
+  for (const edit of edits) {
+    const prior = merged.get(edit.fileUri);
+    if (!prior) {
+      merged.set(edit.fileUri, { ...edit, ...(edit.diff ? { diff: { ...edit.diff } } : {}) });
+      continue;
+    }
+    const added = (prior.diff?.added ?? 0) + (edit.diff?.added ?? 0);
+    const removed = (prior.diff?.removed ?? 0) + (edit.diff?.removed ?? 0);
+    merged.set(edit.fileUri, {
+      fileUri: edit.fileUri,
+      ...(prior.before ? { before: prior.before } : {}),
+      ...(edit.after ? { after: edit.after } : {}),
+      ...(prior.diff || edit.diff ? { diff: { added, removed } } : {}),
+    });
+  }
+  return [...merged.values()].map((edit) => ({
+    id: edit.fileUri,
+    edit: {
+      ...(edit.before ? { before: edit.before } : {}),
+      ...(edit.after ? { after: edit.after } : {}),
+      ...(edit.diff ? { diff: edit.diff } : {}),
+    },
+  })) as unknown as ChangesetFile[];
 }
 
 function unsafeSegment(segment: string): boolean {

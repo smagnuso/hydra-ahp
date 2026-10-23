@@ -8,6 +8,7 @@ import { workingChanges } from "../src/changesets/git.js";
 import { cwdToUri } from "../src/bridge/ids.js";
 import { ROW, startBridgeHarness, type BridgeHarness } from "./support/bridge-harness.js";
 import { sleep } from "./support/harness.js";
+import { chatOf } from "./support/chat-uri.js";
 
 const SESSION = "fake:/h1";
 const CHANGESET = `${SESSION}/changeset/uncommitted`;
@@ -84,6 +85,7 @@ describe("changesets", () => {
     expect(changesets).toEqual([
       expect.objectContaining({ uriTemplate: SESSION_CHANGES, changeKind: "session" }),
       expect.objectContaining({ uriTemplate: CHANGESET, changeKind: "uncommitted" }),
+      expect.objectContaining({ uriTemplate: `${SESSION}/changeset/turn/{turnId}`, changeKind: "turn" }),
     ]);
 
     await session.client.subscribe(CHANGESET);
@@ -319,5 +321,83 @@ describe("changesets", () => {
     expect(edit?.before).toBeUndefined();
     expect(edit?.after.content.uri).not.toBe(`file://${path}`);
     expect(edit?.before).toBeUndefined();
+  });
+  describe("per-turn changes", () => {
+    const turn = (id: string) => `${SESSION}/changeset/turn/${id}`;
+    let seq = 100;
+    const frame = (update: Record<string, unknown>) => ({ update, recordedAt: (seq += 10), seq });
+
+    async function openChat() {
+      dir = mkdtempSync(join(tmpdir(), "ahp-turns-"));
+      const cwd = dir;
+      harness = await startBridgeHarness((hydra) => {
+        hydra.rows = [ROW({ cwd })];
+      }, { changesetPollMs: 50 });
+      const session = await harness.connect();
+      await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+      await session.client.subscribe(chatOf("h1"));
+      return session;
+    }
+
+    function edit(toolCallId: string, path: string, oldText: string | null, newText: string): Record<string, unknown> {
+      return { sessionUpdate: "tool_call", toolCallId, status: "completed", content: [{ type: "diff", path, oldText, newText }] };
+    }
+
+    async function ready(uri: string): Promise<ChangesetState> {
+      const state = (): ChangesetState => harness?.core.store.state(uri) as ChangesetState;
+      for (let tries = 0; tries < 150 && state().status !== "ready"; tries += 1) {
+        await sleep(20);
+      }
+      return state();
+    }
+
+    it("lists the files one turn edited, and nothing from other turns", async () => {
+      const session = await openChat();
+      const send = (update: Record<string, unknown>) => harness?.hydra.listener?.update(frame(update));
+      send({ sessionUpdate: "prompt_received", messageId: "t1", prompt: [{ type: "text", text: "first" }] });
+      send(edit("c1", "/r/a.ts", "one\n", "one\ntwo\n"));
+      send({ sessionUpdate: "turn_complete", stopReason: "end_turn" });
+      send({ sessionUpdate: "prompt_received", messageId: "t2", prompt: [{ type: "text", text: "second" }] });
+      send(edit("c2", "/r/b.ts", null, "new\n"));
+      send({ sessionUpdate: "turn_complete", stopReason: "end_turn" });
+
+      await session.client.subscribe(turn("t1"));
+      const first = await ready(turn("t1"));
+      expect(first.status).toBe("ready");
+      expect(first.files.map((file) => file.id)).toEqual([cwdToUri("/r/a.ts")]);
+      expect(first.files[0]?.edit).toMatchObject({ before: { uri: cwdToUri("/r/a.ts") }, after: { uri: cwdToUri("/r/a.ts") } });
+
+      await session.client.subscribe(turn("t2"));
+      const second = await ready(turn("t2"));
+      expect(second.files.map((file) => file.id)).toEqual([cwdToUri("/r/b.ts")]);
+      expect(second.files[0]?.edit.before).toBeUndefined();
+      expect(second.files[0]?.edit.diff).toMatchObject({ added: 1 });
+    });
+
+    it("shows a file edited twice in a turn from its first before to its last after", async () => {
+      const session = await openChat();
+      const send = (update: Record<string, unknown>) => harness?.hydra.listener?.update(frame(update));
+      send({ sessionUpdate: "prompt_received", messageId: "t1", prompt: [{ type: "text", text: "go" }] });
+      send({ ...edit("c1", "/r/a.ts", "a\n", "a\nb\n"), _meta: { "hydra-acp": { editStats: [{ path: "/r/a.ts", added: 1, removed: 0 }] } } });
+      send({ ...edit("c2", "/r/a.ts", "a\nb\n", "a\nb\nc\n"), _meta: { "hydra-acp": { editStats: [{ path: "/r/a.ts", added: 1, removed: 0 }] } } });
+      send({ sessionUpdate: "turn_complete", stopReason: "end_turn" });
+      await session.client.subscribe(turn("t1"));
+      const state = await ready(turn("t1"));
+      expect(state.files).toHaveLength(1);
+      expect(state.files[0]?.edit.diff).toEqual({ added: 2, removed: 0 });
+      const read = async (uri: string | undefined) =>
+        ((await session.client.request("resourceRead", { channel: "ahp-root://", uri } as never)) as unknown as { data: string }).data;
+      expect(await read(state.files[0]?.edit.before?.content.uri)).toBe("a\n");
+      expect(await read(state.files[0]?.edit.after?.content.uri)).toBe("a\nb\nc\n");
+    });
+
+    it("reports a turn no chat holds as an error", async () => {
+      const session = await openChat();
+      await session.client.subscribe(turn("nope"));
+      for (let tries = 0; tries < 100 && (harness?.core.store.state(turn("nope")) as ChangesetState).status === "computing"; tries += 1) {
+        await sleep(20);
+      }
+      expect((harness?.core.store.state(turn("nope")) as ChangesetState).status).toBe("error");
+    });
   });
 });

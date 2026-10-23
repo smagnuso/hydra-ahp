@@ -45,7 +45,7 @@ export function isSessionChannelUri(uri: string): boolean {
 }
 
 // A session's changesets hang off its URI, as VS Code's own host addresses them: "<session>/changeset/<id>".
-const CHANGESET_URI = /^(?!ahp-chat:|ahp-root:|ahp-resource-watch:|[a-z0-9+.-]*terminal:)[a-z][a-z0-9+.-]*:\/[^/]+\/changeset\/[^/]+$/i;
+const CHANGESET_URI = /^(?!ahp-chat:|ahp-root:|ahp-resource-watch:|[a-z0-9+.-]*terminal:)[a-z][a-z0-9+.-]*:\/[^/]+\/changeset\/(?:turn\/)?[^/]+$/i;
 
 export function isChangesetChannelUri(uri: string): boolean {
   return CHANGESET_URI.test(uri);
