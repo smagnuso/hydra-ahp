@@ -1,6 +1,7 @@
 import {
   changesetReducer,
   chatReducer,
+  resourceWatchReducer,
   rootReducer,
   sessionReducer,
   terminalReducer,
@@ -8,6 +9,7 @@ import {
   type ActionOrigin,
   type ChangesetState,
   type ChatState,
+  type ResourceWatchState,
   type RootState,
   type SessionState,
   type Snapshot,
@@ -17,9 +19,9 @@ import {
 
 export const ROOT_URI = "ahp-root://";
 
-export type ChannelKind = "root" | "session" | "chat" | "terminal" | "changeset";
+export type ChannelKind = "root" | "session" | "chat" | "terminal" | "changeset" | "resourceWatch";
 
-export type ChannelState = RootState | SessionState | ChatState | TerminalState | ChangesetState;
+export type ChannelState = RootState | SessionState | ChatState | TerminalState | ChangesetState | ResourceWatchState;
 
 // Clients pick terminal URIs too; the spec uses ahp-terminal: and VS Code agenthost-terminal:.
 const TERMINAL_URI = /^[a-z][a-z0-9+.-]*terminal:\/[^/]+$/i;
@@ -28,15 +30,22 @@ export function isTerminalUri(uri: string): boolean {
   return TERMINAL_URI.test(uri);
 }
 
+// A watch is allocated by the host, so its URI is the spec's own.
+const RESOURCE_WATCH_URI = /^ahp-resource-watch:\/[^/]+$/;
+
+export function isResourceWatchUri(uri: string): boolean {
+  return RESOURCE_WATCH_URI.test(uri);
+}
+
 // Clients that create a session pick its URI, usually "<provider>:/<id>", so any such shape is a session channel.
-const SESSION_URI = /^(?!ahp-chat:|ahp-root:|[a-z0-9+.-]*terminal:)[a-z][a-z0-9+.-]*:\/[^/]+$/i;
+const SESSION_URI = /^(?!ahp-chat:|ahp-root:|ahp-resource-watch:|[a-z0-9+.-]*terminal:)[a-z][a-z0-9+.-]*:\/[^/]+$/i;
 
 export function isSessionChannelUri(uri: string): boolean {
   return SESSION_URI.test(uri);
 }
 
 // A session's changesets hang off its URI, as VS Code's own host addresses them: "<session>/changeset/<id>".
-const CHANGESET_URI = /^(?!ahp-chat:|ahp-root:|[a-z0-9+.-]*terminal:)[a-z][a-z0-9+.-]*:\/[^/]+\/changeset\/[^/]+$/i;
+const CHANGESET_URI = /^(?!ahp-chat:|ahp-root:|ahp-resource-watch:|[a-z0-9+.-]*terminal:)[a-z][a-z0-9+.-]*:\/[^/]+\/changeset\/[^/]+$/i;
 
 export function isChangesetChannelUri(uri: string): boolean {
   return CHANGESET_URI.test(uri);
@@ -51,6 +60,9 @@ export function channelKind(uri: string): ChannelKind | undefined {
   }
   if (isTerminalUri(uri)) {
     return "terminal";
+  }
+  if (isResourceWatchUri(uri)) {
+    return "resourceWatch";
   }
   if (isChangesetChannelUri(uri)) {
     return "changeset";
@@ -96,6 +108,8 @@ function reduce(kind: ChannelKind, state: ChannelState, action: StateAction): Ch
       return terminalReducer(state as TerminalState, action as Parameters<typeof terminalReducer>[1]);
     case "changeset":
       return changesetReducer(state as ChangesetState, action as Parameters<typeof changesetReducer>[1]);
+    case "resourceWatch":
+      return resourceWatchReducer(state as ResourceWatchState, action as Parameters<typeof resourceWatchReducer>[1]);
   }
 }
 

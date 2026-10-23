@@ -9,6 +9,8 @@ import { ProtocolCore } from "../src/protocol/core.js";
 import { AhpListener } from "../src/server/listener.js";
 import { TokenRegistry, type FileLevel } from "../src/store/tokens.js";
 import { FileService, type FileSession } from "../src/files/service.js";
+import { ResourceWatchService } from "../src/files/watch.js";
+import { isResourceWatchUri } from "../src/protocol/channels.js";
 import { EditedPaths, extractEditedPaths, extractResourceLinkImagePaths } from "../src/files/scope.js";
 import { openSession, type Session } from "./support/harness.js";
 
@@ -20,11 +22,38 @@ const INVALID = -32602;
 const METHOD_NOT_FOUND = -32601;
 
 class FileBackend extends FakeBackend {
+  readonly watches: ResourceWatchService;
+
   constructor(private readonly files: FileService) {
     super();
+    this.watches = new ResourceWatchService({ files, debounceMs: 20, graceMs: 200 });
+  }
+
+  override start(core: ProtocolCore): void {
+    super.start(core);
+    this.watches.start(core);
+  }
+
+  override async attach(uri: string): Promise<void> {
+    if (isResourceWatchUri(uri)) {
+      await this.watches.attach(uri);
+      return;
+    }
+    super.attach(uri);
+  }
+
+  override detach(uri: string): void {
+    if (isResourceWatchUri(uri)) {
+      this.watches.detach(uri);
+      return;
+    }
+    super.detach(uri);
   }
 
   override handleCommand(method: string, params: unknown, client: ClientContext): unknown {
+    if (this.watches.handles(method)) {
+      return this.watches.handle(method, params, client);
+    }
     if (this.files.handles(method)) {
       return this.files.handle(method, params, client);
     }
@@ -61,6 +90,7 @@ describe("file access", () => {
   let remoteInPicker: string;
   let picker: string;
   let listener: AhpListener;
+  let core: ProtocolCore;
   let port: number;
   let tokens: TokenRegistry;
   const sessions: Session[] = [];
@@ -105,7 +135,7 @@ describe("file access", () => {
       dirRoots: [picker],
     });
     tokens = new TokenRegistry({ path: join(dir, "tokens.json") });
-    const core = new ProtocolCore({ backend: new FileBackend(service) });
+    core = new ProtocolCore({ backend: new FileBackend(service) });
     await core.start();
     listener = new AhpListener({ core, tokens });
     port = await listener.listen();
@@ -119,12 +149,16 @@ describe("file access", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function connect(level: FileLevel): Promise<Session["client"]> {
+  async function connectSession(level: FileLevel): Promise<Session> {
     const { token } = tokens.mint(`t-${level}`, level);
     const session = await openSession(`ws://127.0.0.1:${port}/?tkn=${token}`);
     sessions.push(session);
     await session.client.initialize({ clientId: `c-${level}`, protocolVersions: ["0.9.0"] });
-    return session.client;
+    return session;
+  }
+
+  async function connect(level: FileLevel): Promise<Session["client"]> {
+    return (await connectSession(level)).client;
   }
 
   describe("scoped", () => {
@@ -292,7 +326,7 @@ describe("file access", () => {
   });
 
   describe("level matrix", () => {
-    it("answers -32601 for every write command and the watch below full", async () => {
+    it("answers -32601 for every write command below full", async () => {
       for (const level of ["scoped", "read"] as const) {
         const client = await connect(level);
         const target = u(join(proj, "new.txt"));
@@ -301,7 +335,6 @@ describe("file access", () => {
         expect(await code(client.resourceMkdir({ uri: u(join(proj, "d")) }))).toBe(METHOD_NOT_FOUND);
         expect(await code(client.resourceMove({ source: u(join(proj, "readme.md")), destination: target }))).toBe(METHOD_NOT_FOUND);
         expect(await code(client.resourceCopy({ source: u(join(proj, "readme.md")), destination: target }))).toBe(METHOD_NOT_FOUND);
-        expect(await code(client.createResourceWatch({ uri: u(proj) } as never))).toBe(METHOD_NOT_FOUND);
         expect(existsSync(join(proj, "new.txt"))).toBe(false);
         expect(existsSync(join(proj, "d"))).toBe(false);
       }
@@ -319,10 +352,159 @@ describe("file access", () => {
       expect(await code(client.resourceRead({ uri: u(join(secret, "missing")) }))).toBe(NOT_FOUND);
     });
 
-    it("lets full read anywhere and keeps createResourceWatch refused", async () => {
+    it("lets full read anywhere", async () => {
       const client = await connect("full");
       expect((await client.resourceRead({ uri: u(join(secret, "key.txt")) })).data).toBe("TOP SECRET");
-      expect(await code(client.createResourceWatch({ uri: u(proj) } as never))).toBe(METHOD_NOT_FOUND);
+    });
+  });
+
+  describe("resource watches", () => {
+    const tick = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    function changes(session: Session, channel: string): Array<{ uri: string; type: string }> {
+      return session.events
+        .filter((event) => event.channel === channel && event.action.type === "resourceWatch/changed")
+        .flatMap((event) => (event.action as unknown as { changes: { items: Array<{ uri: string; type: string }> } }).changes.items);
+    }
+
+    async function seen(session: Session, channel: string, uri: string, type: string): Promise<void> {
+      for (let i = 0; i < 100; i += 1) {
+        if (changes(session, channel).some((change) => change.uri === uri && change.type === type)) {
+          return;
+        }
+        await tick(25);
+      }
+      throw new Error(`no ${type} for ${uri}; saw ${JSON.stringify(changes(session, channel))}`);
+    }
+
+    async function watch(session: Session, params: Record<string, unknown>): Promise<string> {
+      const created = (await session.client.createResourceWatch(params as never)) as unknown as { channel: string };
+      await session.client.subscribe(created.channel);
+      return created.channel;
+    }
+
+    it("reports files added, changed and deleted under a recursive watch", async () => {
+      const session = await connectSession("scoped");
+      const root = join(proj, "watched");
+      mkdirSync(join(root, "sub"), { recursive: true });
+      const channel = await watch(session, { uri: u(root), recursive: true });
+      expect(channel).toMatch(/^ahp-resource-watch:\/[0-9a-f]+$/);
+      const file = join(root, "sub", "one.txt");
+      writeFileSync(file, "1");
+      await seen(session, channel, u(file), "added");
+      writeFileSync(file, "22");
+      await seen(session, channel, u(file), "updated");
+      rmSync(file);
+      await seen(session, channel, u(file), "deleted");
+    });
+
+    it("watches a directory that appears later, and what lands in it", async () => {
+      const session = await connectSession("scoped");
+      const root = join(proj, "growing");
+      mkdirSync(root, { recursive: true });
+      const channel = await watch(session, { uri: u(root), recursive: true });
+      mkdirSync(join(root, "later"));
+      await seen(session, channel, u(join(root, "later")), "added");
+      const file = join(root, "later", "x.txt");
+      writeFileSync(file, "x");
+      await seen(session, channel, u(file), "added");
+    });
+
+    it("honors excludes and includes and never reports .git", async () => {
+      const session = await connectSession("scoped");
+      const root = join(proj, "filtered");
+      mkdirSync(join(root, "skip"), { recursive: true });
+      mkdirSync(join(root, ".git"), { recursive: true });
+      const channel = await watch(session, { uri: u(root), recursive: true, excludes: { items: ["**/skip/**"] }, includes: { items: ["**/*.ts"] } });
+      writeFileSync(join(root, "skip", "a.ts"), "a");
+      writeFileSync(join(root, ".git", "b.ts"), "b");
+      writeFileSync(join(root, "c.txt"), "c");
+      writeFileSync(join(root, "d.ts"), "d");
+      await seen(session, channel, u(join(root, "d.ts")), "added");
+      await tick(150);
+      expect(changes(session, channel).map((change) => change.uri)).toEqual([u(join(root, "d.ts"))]);
+    });
+
+    it("skips installed packages and nested repositories without being asked", async () => {
+      const session = await connectSession("scoped");
+      const root = join(proj, "packages");
+      mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+      mkdirSync(join(root, "vendor", ".git"), { recursive: true });
+      const channel = await watch(session, { uri: u(root), recursive: true });
+      writeFileSync(join(root, "node_modules", "pkg", "index.js"), "x");
+      writeFileSync(join(root, "vendor", ".git", "HEAD"), "x");
+      writeFileSync(join(root, "own.txt"), "x");
+      await seen(session, channel, u(join(root, "own.txt")), "added");
+      await tick(150);
+      expect(changes(session, channel).map((change) => change.uri)).toEqual([u(join(root, "own.txt"))]);
+    });
+
+    it("keeps overlapping watches independent while they share directory watchers", async () => {
+      const session = await connectSession("scoped");
+      const root = join(proj, "overlap");
+      mkdirSync(join(root, "inner"), { recursive: true });
+      const outer = await watch(session, { uri: u(root), recursive: true });
+      const inner = await watch(session, { uri: u(join(root, "inner")), recursive: true });
+      expect(inner).not.toBe(outer);
+      await session.client.unsubscribe(outer);
+      for (let i = 0; i < 40 && core.store.has(outer); i += 1) {
+        await tick(25);
+      }
+      const file = join(root, "inner", "after.txt");
+      writeFileSync(file, "x");
+      await seen(session, inner, u(file), "added");
+    });
+
+    it("keeps a non-recursive watch to the directory's own children", async () => {
+      const session = await connectSession("scoped");
+      const root = join(proj, "flat");
+      mkdirSync(join(root, "deep"), { recursive: true });
+      const channel = await watch(session, { uri: u(root) });
+      writeFileSync(join(root, "deep", "inner.txt"), "i");
+      writeFileSync(join(root, "top.txt"), "t");
+      await seen(session, channel, u(join(root, "top.txt")), "added");
+      expect(changes(session, channel).some((change) => change.uri === u(join(root, "deep", "inner.txt")))).toBe(false);
+    });
+
+    it("shares one watch between identical requests and drops it with its last subscriber", async () => {
+      const first = await connectSession("scoped");
+      const second = await connectSession("scoped");
+      const root = join(proj, "shared");
+      mkdirSync(root, { recursive: true });
+      const a = await watch(first, { uri: u(root), recursive: true });
+      const b = await watch(second, { uri: u(root), recursive: true });
+      expect(b).toBe(a);
+      await first.client.unsubscribe(a);
+      await tick(50);
+      expect(core.store.has(a)).toBe(true);
+      await second.client.unsubscribe(a);
+      for (let i = 0; i < 40 && core.store.has(a); i += 1) {
+        await tick(25);
+      }
+      expect(core.store.has(a)).toBe(false);
+    });
+
+    it("drops a watch nobody subscribes to", async () => {
+      const session = await connectSession("scoped");
+      const root = join(proj, "orphan");
+      mkdirSync(root, { recursive: true });
+      const created = (await session.client.createResourceWatch({ uri: u(root) } as never)) as unknown as { channel: string };
+      expect(core.store.has(created.channel)).toBe(true);
+      for (let i = 0; i < 40 && core.store.has(created.channel); i += 1) {
+        await tick(25);
+      }
+      expect(core.store.has(created.channel)).toBe(false);
+    });
+
+    it("follows the token's read scope", async () => {
+      const scoped = await connect("scoped");
+      expect(await code(scoped.createResourceWatch({ uri: u(secret) } as never))).toBe(DENIED);
+      expect(await code(scoped.createResourceWatch({ uri: u(picker) } as never))).toBe(DENIED);
+      expect(await code(scoped.createResourceWatch({ uri: u(join(proj, "missing")) } as never))).toBe(NOT_FOUND);
+      const read = await connect("read");
+      expect(await code(read.createResourceWatch({ uri: u(secret) } as never))).toBeUndefined();
+      const full = await connect("full");
+      expect(await code(full.createResourceWatch({ uri: u(secret) } as never))).toBeUndefined();
     });
   });
 

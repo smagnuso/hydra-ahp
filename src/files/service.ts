@@ -212,6 +212,24 @@ export class FileService {
     }
   }
 
+  // The real path a token may watch: a read grant, minus the directory-only roots that hide file names.
+  async authorizeWatch(level: FileLevel, rawParams: unknown): Promise<string> {
+    const params = objectParams(rawParams);
+    try {
+      const grant = await this.authorize(level, toPath(uriParam(params, "uri")));
+      if (grant.dirsOnly) {
+        throw new PathScopeError("path is outside the files this token may access");
+      }
+      await stat(grant.real);
+      return grant.real;
+    } catch (err) {
+      if (err instanceof PathScopeError) {
+        throw new RpcError(PERMISSION_DENIED, err.message);
+      }
+      throw fsError(err);
+    }
+  }
+
   // Decides what the token may do with a path; follow=false keeps a final symlink unresolved.
   private async authorize(level: FileLevel, path: string, follow = true): Promise<Grant> {
     const real = follow ? await realpathLoose(path) : join(await realpathLoose(dirname(path)), basename(path));

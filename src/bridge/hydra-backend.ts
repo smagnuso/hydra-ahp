@@ -12,8 +12,9 @@ import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { FileService } from "../files/service.js";
 import type { TerminalService } from "../terminals/service.js";
+import { ResourceWatchService } from "../files/watch.js";
 import type { ChangesetService } from "../changesets/service.js";
-import { isChangesetChannelUri, isTerminalUri } from "../protocol/channels.js";
+import { isChangesetChannelUri, isResourceWatchUri, isTerminalUri } from "../protocol/channels.js";
 import { HydraHttpError, type HydraRest, type HydraSessionEntry } from "../hydra/rest.js";
 import type { HydraSessions } from "../hydra/sessions.js";
 import { logger } from "../util/log.js";
@@ -46,6 +47,7 @@ export interface HydraBackendOptions {
   files: FileService;
   terminals?: TerminalService;
   changesets?: ChangesetService;
+  watches?: ResourceWatchService;
   permissionDelayMs?: number;
 }
 
@@ -68,6 +70,7 @@ export class HydraBackend implements Backend {
   private readonly files: FileService;
   private readonly terminals: TerminalService | undefined;
   private readonly changesets: ChangesetService | undefined;
+  private readonly watches: ResourceWatchService;
   private readonly edits = new EditContentStore();
   private readonly permissionDelayMs: number;
 
@@ -79,6 +82,7 @@ export class HydraBackend implements Backend {
     this.files = options.files;
     this.terminals = options.terminals;
     this.changesets = options.changesets;
+    this.watches = options.watches ?? new ResourceWatchService({ files: options.files });
     this.permissionDelayMs = options.permissionDelayMs ?? 0;
     this.serverInfo = { name: "hydra-ahp", version: options.version };
   }
@@ -87,6 +91,7 @@ export class HydraBackend implements Backend {
     this.core = core;
     await this.terminals?.start(core);
     this.changesets?.start(core);
+    this.watches.start(core);
     this.catalog.onChange(() => this.onCatalogChange());
     this.catalog.onFlagChanged((hydraId, flag, value) => this.bridges.get(hydraId)?.showFlag(flag, value));
     this.catalog.onDirectoryChanged((uri, directory) => {
@@ -103,6 +108,7 @@ export class HydraBackend implements Backend {
     this.catalog.stop();
     this.terminals?.stop();
     this.changesets?.stop();
+    this.watches.stop();
     const bridges = [...this.bridges.values()];
     this.bridges.clear();
     await Promise.all(bridges.map((bridge) => bridge.dispose().catch(() => undefined)));
@@ -238,6 +244,10 @@ export class HydraBackend implements Backend {
       this.changesets?.attach(uri);
       return;
     }
+    if (isResourceWatchUri(uri)) {
+      await this.watches.attach(uri);
+      return;
+    }
     await this.creating.get(uri);
     if (isChatUri(uri)) {
       if (this.core.store.has(uri) && !this.catalog.resolveChat(uri)) {
@@ -269,6 +279,10 @@ export class HydraBackend implements Backend {
     }
     if (isChangesetChannelUri(uri)) {
       this.changesets?.detach(uri);
+      return;
+    }
+    if (isResourceWatchUri(uri)) {
+      this.watches.detach(uri);
       return;
     }
     if (isSessionUri(uri)) {
@@ -330,6 +344,9 @@ export class HydraBackend implements Backend {
     }
     if (method === "resourceRead" && isEditContentUri(target)) {
       return this.edits.read(target, (params as { encoding?: unknown }).encoding);
+    }
+    if (this.watches.handles(method)) {
+      return this.watches.handle(method, params, client);
     }
     if (this.files.handles(method)) {
       return this.files.handle(method, params, client);

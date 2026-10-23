@@ -282,7 +282,8 @@ and offers to restart the extension. Re-run it within ~90 days to renew.
   token is never used or exposed.
 - **No web pages.** WebSocket upgrades from web page origins are refused.
 - **Token levels gate files and terminals.** See [Token levels](#token-levels).
-  File watches (`createResourceWatch`) are refused at every level.
+  File watches (`createResourceWatch`) follow the read scope: a `scoped` token
+  can watch only what it can read, and never `.git`.
 - **Permission races.** hydra-ahp never answers a permission request on a
   client's behalf; with no AHP client asked, it abstains and leaves the request
   to hydra's other clients.
