@@ -48,15 +48,18 @@ is a Hydra client downstream: `/acp` with the per-process extension token in
   dispatch validation and echo, fake backend for tests
 - `src/bridge/`: catalog poller, session bridges, update mapping, turn
   tracking, prompt conversion, the backend tying them together
-- `src/files/`: `resource*` commands and `@` completions, gated by token level
+- `src/files/`: `resource*` commands, `@` completions and `createResourceWatch`
+  (`watch.ts`, `glob.ts`), gated by token level
 - `src/hydra/`: `/acp` client, REST client, `extension_state`, version check
 - `src/store/`: token registry (`tokens.json`), read/archive flags of
-  federated sessions (`flags.json`), per-agent model lists (`models.json`) and config option
-  sets (`configs.json`), all 0600 under `<hydra home>/extensions/ahp/`
+  federated sessions (`flags.json`), per-agent model lists (`models.json`),
+  config option sets (`configs.json`) and per-model effort option sets
+  (`model-options.json`), all 0600 under `<hydra home>/extensions/ahp/`
 - `src/terminals/`: `createTerminal` and terminal channels over node-pty
   (optional dependency)
 - `src/changesets/`: the session and uncommitted changesets, from git plus
-  Hydra's `/v1/sessions/:id/diff`
+  Hydra's `/v1/sessions/:id/diff`, and per-turn changesets from the `fileEdit`
+  results in the chat state
 - `src/commands/`: the `/hydra ahp token ...` verbs
 - `scripts/record-host.mjs`: frame-logging stub host for recon
 - `test/`: unit tests plus `test/integration/` against scratch daemons
@@ -83,6 +86,50 @@ elides the `hydra-` prefix, so slash commands are `/hydra ahp <verb>`.
   not trigger Hydra's reaping path.
 - `.npmrc` is a symlink to `../.npmrc` (npm reads it only next to the nearest
   `package.json`).
+
+## Seeing VS Code's UI (headless)
+
+To check what VS Code actually draws, run a second Insiders instance on a
+virtual display with its own profile; it never touches the user's windows.
+
+1. Mint a throwaway token: `hydra ahp token mint ui-probe --files scoped`
+   (the secret is printed once; revoke it afterwards with `token revoke <id>`).
+   A scoped token makes `createTerminal` fail with `-32601`, which shows as a
+   toast and is expected.
+2. In `<tmp>/user/User/settings.json` set `chat.remoteAgentHosts` to
+   `[{ "address": "wss://<host:port>", "name": "ahp-probe", "connectionToken": "<token>" }]`,
+   taking `<host:port>` from `<hydra home>/extensions/ahp/endpoint.json` (the
+   listener may be bound to the tailnet address only, so not `127.0.0.1`).
+3. Launch the Electron binary directly, in the background:
+   `xvfb-run -a -s "-screen 0 1600x1000x24" /usr/share/code-insiders/code-insiders --user-data-dir <tmp>/user --extensions-dir <tmp>/ext --remote-debugging-port=9333 --no-sandbox --disable-gpu --disable-updates --agents`.
+   Do not use the `code-insiders` CLI wrapper: it spawns the app detached and
+   exits, so `xvfb-run` tears the display down.
+4. Drive it over the Chrome DevTools Protocol (`GET http://127.0.0.1:9333/json/list`,
+   then the page's `webSocketDebuggerUrl`): `Page.captureScreenshot`,
+   `Input.dispatchMouseEvent`, `Input.insertText`, `Runtime.evaluate`. The
+   `ws` package in `node_modules` is enough; no Playwright needed. Cancel the
+   folder-trust dialog that appears.
+5. Clean up: kill the scratch processes by PID (the user's own `--agents`
+   instance has no `--user-data-dir`; never `pkill -f` a pattern that is in
+   your own command line), revoke the token, delete `<tmp>` (screenshots
+   hold session titles).
+
+In the Agents window a session's remaining settings (any option that is not
+the model, agent, mode or an effort) are small text chips in the row under the
+prompt (`.chat-secondary-generic-chips`, a responsive container); a model's
+effort and mode are one chip beside the model name. In a clean profile they show on a fresh
+open, after an extension restart, with the experimental composer layout
+(`sessions.chat.unifiedWorkspacePicker.enabled` and
+`sessions.chat.experimental.newSessionComposerLayout` both true) and in a wide
+pane; a window that lacks them (it also lacked VS Code's own "Agent" pill)
+differs in client state, not in what the extension sends.
+
+Without any UI, VS Code writes every AHP frame it sends and receives to
+`~/.config/Code - Insiders/logs/<run>/ahp/*.jsonl`; that is often enough to
+tell whether a problem is the server's data or the client's drawing. The
+client code is minified under `/usr/share/code-insiders/resources/app/out/vs/`
+(`workbench/workbench.desktop.main.js`, `sessions/sessions.desktop.main.js`);
+read it with a small script, not `grep -o` with long contexts.
 
 ## Gotchas
 
@@ -119,7 +166,8 @@ elides the `hydra-` prefix, so slash commands are `/hydra ahp <verb>`.
 - **Token levels gate `resource*` and terminals**: `full` (default),
   `read`, `scoped`. Levels are not a security boundary against a hostile
   client: any token can prompt an agent and approve its permission requests.
-  They only limit direct access; `createResourceWatch` is `-32601` at every level and
+  They only limit direct access; `createResourceWatch` follows the same read
+  scope as `resourceRead` (never the directory-only picker roots), and
   `createTerminal` is `-32601` below `full`. Orphaned terminals die after a
   30 s grace.
 - **VS Code session URIs must use the agent id as scheme**
@@ -133,8 +181,45 @@ elides the `hydra-` prefix, so slash commands are `/hydra ahp <verb>`.
 - **Session config schema cannot change live**: `session/configChanged`
   merges values only, so the schema is fixed when the session channel is
   built (after attach, from live `configOptions` or the per-agent cache).
-  Properties are `acp.<optionId>`; `model` is excluded (own picker), Hydra's
-  `agent` option is included.
+  Properties are `acp.<optionId>`. `model` (own picker), `agent` (chosen when
+  a chat is created, each agent being its own session type) and the
+  effort-like options (below) are not settings. VS Code's Agents window draws
+  any string-enum property marked `sessionMutable` as a chip, for running
+  sessions too.
+- **Effort-like options and the mode ride on the model**: they are each
+  model's `configSchema` in the root list, not session settings. VS Code's
+  model picker has two slots and only reads these keys: `tier`, `autoTier`,
+  `thinkingLevel`, `reasoningEffort` for the first, `contextSize` and
+  `contextTier` for the second; any other key is ignored. Effort takes the
+  first slot and the mode (`mode` option) the second, as `contextTier`, so
+  the chip reads like "Default Build" and the popup has an "Effort" and a
+  "Session Mode" section. `modelConfigKey` maps Hydra's option ids onto the
+  keys, a prompt's `model.config` maps back (applied before the prompt, like
+  the model), and `model-options.json` remembers each model's choices (unseen
+  models use the agent's last set). A window that draws no chips for session
+  settings still draws this. VS Code keeps the value per model and may show its
+  own "resets the prompt cache" note on it.
+- **Agents are labelled "Hydra · <name>"** in the picker so the chat
+  placeholder still starts with Hydra. VS Code reads a session's agent from
+  its URI scheme and builds the backend URI as `<provider>:/<id>` itself, so
+  when another client switches a session's agent the catalog moves its stamp
+  to the new scheme (`followAgents`).
+- **Hydra's own notices open an orphan turn**: an agent-switch notice arrives
+  as a bare agent message outside any turn, the mapper opens an `orphan-`
+  turn for it and Hydra never ends it, so the bridge closes it once Hydra is
+  idle (`armOrphanSettle`); otherwise the chat spins and the next prompt
+  becomes a steer.
+- **Resource watches skip heavy trees and share OS watchers**: VS Code asks
+  for recursive watches of the workspace and of nested folders at once, with
+  only `.git/objects` style excludes. `node_modules`, `.git`, `.hg` and `.svn`
+  are always excluded, one OS watcher serves every watch covering a
+  directory (cap 8192), and `.git` is never reported. The machine's inotify
+  budget is shared with every other process; "Unable to watch for file
+  changes" in VS Code usually means that limit, not this extension.
+- **Turn changesets come from the chat state**: `<session>/changeset/turn/{turnId}`
+  is built from the turn's `fileEdit` results, so it only exists while a chat
+  holds that turn; VS Code asks for turns of chats it is not showing, which
+  answer an error and are retried with a backoff.
 - **New permission requests are held** (`HYDRA_AHP_PERMISSION_DELAY_MS`,
   default 500 ms) so one an auto-approver answers is never shown.
 - **Steers split turns**: AHP has no user message mid-turn, so a steer ends
@@ -173,7 +258,10 @@ elides the `hydra-` prefix, so slash commands are `/hydra ahp <verb>`.
   placeholder ("Preparing file…") and name it in later updates, so the
   mapper refreshes `displayName` on every update. A confirmation carries the
   pending edits (`edits` on `toolCallReady`) so VS Code shows the diff before
-  approval.
+  approval. opencode titles a call with just its tool ("grep", "read") and
+  sends the pattern and path only in a later update, so `describeCall` builds
+  the row's message from `rawInput` and `locations` (for example
+  ``grep `foo` in `.../bridge` ``); a title that already says more is kept.
 - **opencode's `apply_patch` has no diff blocks**: each file's unified diff
   is in `rawOutput.metadata.files[]`, unfolded by `src/bridge/patch.ts` into
   hunk-only before and after text (a copy of the daemon's and the browser's
