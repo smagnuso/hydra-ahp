@@ -47,19 +47,16 @@ describe("an agent's config options as session settings against a scratch daemon
     return echo.rejectionReason;
   }
 
-  it("offers only Hydra's agent switch for an agent that advertises no options", async () => {
+  it("offers no settings for an agent that advertises no options of its own", async () => {
     const { uri } = await prompted("fake");
-    const config = await configOf(uri);
-    expect(Object.keys(config?.schema.properties ?? {})).toEqual(["acp.agent"]);
-    expect(config?.values["acp.agent"]).toBe("fake");
-    expect(config?.schema.properties["acp.agent"]?.enum).toContain("fake-config");
+    expect((await configOf(uri))?.schema.properties ?? {}).not.toHaveProperty("acp.agent");
   });
 
   it("lists the agent's options as mutable settings with their current values", async () => {
     const { uri } = await prompted("fake-config");
     const config = await configOf(uri);
-    expect(config?.values).toEqual({ "acp.agent": "fake-config", "acp.tone": "medium", "acp.fast": "off" });
-    expect(Object.keys(config?.schema.properties ?? {})).toEqual(["acp.agent", "acp.tone", "acp.fast"]);
+    expect(config?.values).toEqual({ "acp.tone": "medium", "acp.fast": "off" });
+    expect(Object.keys(config?.schema.properties ?? {})).toEqual(["acp.tone", "acp.fast"]);
     expect(config?.schema.properties["acp.tone"]).toMatchObject({
       type: "string",
       title: "Effort",
@@ -90,10 +87,10 @@ describe("an agent's config options as session settings against a scratch daemon
     });
   });
 
-  it("switches the session's agent, which moves it to the new agent's URI", async () => {
+  it("moves a session to the new agent's URI when another client switches its agent", async () => {
     const { id, uri } = await prompted("fake");
     await configOf(uri);
-    expect(await change(uri, { "acp.agent": "fake-config" })).toBeUndefined();
+    await driver.setConfigOption(id, "agent", "fake-config");
     const moved = sessionOf(id, "fake-config");
     await until(
       "listed under the new agent",
@@ -107,7 +104,7 @@ describe("an agent's config options as session settings against a scratch daemon
       20000,
     );
     const config = await configOf(moved);
-    expect(config?.values).toMatchObject({ "acp.agent": "fake-config", "acp.tone": "medium" });
+    expect(config?.values).toMatchObject({ "acp.tone": "medium" });
   });
 
   it("refuses unknown settings, bad values and replacing them all", async () => {
@@ -126,7 +123,7 @@ describe("an agent's config options as session settings against a scratch daemon
       provider: "fake-config",
       config: { "acp.tone": "high", "acp.fast": "bogus" },
     } as never)) as unknown as { schema: { properties: Record<string, unknown> }; values: Record<string, unknown> };
-    expect(Object.keys(offered.schema.properties)).toEqual(["acp.agent", "acp.tone", "acp.fast"]);
+    expect(Object.keys(offered.schema.properties)).toEqual(["acp.tone", "acp.fast"]);
     expect(offered.values).toMatchObject({ "acp.tone": "high", "acp.fast": "off" });
 
     const before = new Set((await daemon.admin.listSessions({ includeNonInteractive: true })).sessions.map((row) => row.sessionId));

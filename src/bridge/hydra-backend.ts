@@ -369,9 +369,6 @@ export class HydraBackend implements Backend {
       const pick = picks[key];
       values[key] = typeof pick === "string" && schema.enum?.includes(pick) ? pick : state.values[key];
     }
-    if (provider && "acp.agent" in values) {
-      values["acp.agent"] = provider;
-    }
     return { schema: state.schema, values };
   }
 
@@ -424,9 +421,8 @@ export class HydraBackend implements Backend {
     const chat = defaultChatUri(channel);
     const offered = this.resolveSessionConfig({ provider, config: params.config });
     log.debug(`createSession ${channel} provider=${String(provider)} config=${JSON.stringify(params.config ?? null)} offered=${JSON.stringify(offered.values)}`);
-    // The new session already runs the agent the client chose; an agent pick that differs is a stale remembered value that would switch it.
     const picks = Object.fromEntries(
-      Object.entries(offered.values).filter((pair): pair is [string, string] => typeof pair[1] === "string" && pair[0] !== "acp.agent"),
+      Object.entries(offered.values).filter((pair): pair is [string, string] => typeof pair[1] === "string"),
     );
     const config = Object.keys(offered.values).length > 0 ? ({ schema: offered.schema, values: offered.values } as SessionConfigState) : undefined;
     this.catalog.beginCreation(channel, summary);

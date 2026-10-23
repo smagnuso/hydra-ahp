@@ -945,7 +945,7 @@ function toAgentInfo(agent: HydraAgent, models: readonly KnownModel[], available
   const description = agent.description ?? "";
   return {
     provider: agent.id,
-    displayName: "Hydra",
+    displayName: `Hydra · ${agent.name}`,
     description: available ? description : [description, UNAVAILABLE].filter(Boolean).join(" "),
     models: models.map((model) => ({
       id: model.id,

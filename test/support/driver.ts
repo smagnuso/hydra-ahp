@@ -80,6 +80,10 @@ export class Driver {
     });
   }
 
+  setConfigOption(sessionId: string, configId: string, value: string): Promise<unknown> {
+    return this.client.request("session/set_config_option", { sessionId, configId, value });
+  }
+
   detach(sessionId: string): Promise<unknown> {
     return this.client.request("session/detach", { sessionId });
   }

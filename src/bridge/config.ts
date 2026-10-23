@@ -16,8 +16,9 @@ export interface ConfigOption {
   options: ConfigChoice[];
 }
 
-// Models have their own picker (AHP carries the model on each message), so the model is not a setting.
-const OWN_PICKER_IDS = new Set(["model"]);
+// Models have their own picker (AHP carries the model on each message), and an agent is chosen when a chat is
+// created (each agent is its own session type), so neither is a setting.
+const OWN_PICKER_IDS = new Set(["model", "agent"]);
 
 // Namespaced so Hydra's and the agents' ids never collide with the properties VS Code gives meaning to (mode, autoApprove, ...).
 const PROPERTY_PREFIX = "acp.";
@@ -76,7 +77,7 @@ export function modelBoundOf(options: readonly ConfigOption[]): ConfigOption[] {
   return options.filter((option) => isModelBound(option.id));
 }
 
-// The settings a client can show: everything but the model and what rides with it, including Hydra's agent switch.
+// The settings a client can show: everything but the model, the agent and what rides with the model.
 export function settingsOf(options: readonly ConfigOption[]): ConfigOption[] {
   return options.filter((option) => !OWN_PICKER_IDS.has(option.id) && !isModelBound(option.id));
 }

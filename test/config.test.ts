@@ -47,11 +47,11 @@ describe("toConfigState", () => {
     });
   });
 
-  it("leaves out the model, keeps Hydra's agent switch, and is absent when nothing is left", () => {
+  it("leaves out the model and the agent, and is absent when nothing is left", () => {
     const model = { ...effort, id: "model" };
     const agent = { ...effort, id: "agent" };
-    expect(toConfigState(parseConfigOptions([model]))).toBeUndefined();
-    expect(Object.keys(toConfigState(parseConfigOptions([model, agent, effort]))?.schema.properties ?? {})).toEqual(["acp.agent", "acp.tone"]);
+    expect(toConfigState(parseConfigOptions([model, agent]))).toBeUndefined();
+    expect(Object.keys(toConfigState(parseConfigOptions([model, agent, effort]))?.schema.properties ?? {})).toEqual(["acp.tone"]);
   });
 
   it("maps property ids back to Hydra's option ids", () => {
@@ -87,7 +87,7 @@ describe("cached session config", () => {
     await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
     await session.client.subscribe(sessionUri);
     const state = (): SessionState => harness?.core.store.state(sessionUri) as SessionState;
-    expect(state().config?.values).toEqual({ "acp.mode": "default", "acp.agent": "claude-personal", "acp.tone": "low" });
+    expect(state().config?.values).toEqual({ "acp.mode": "default", "acp.tone": "low" });
 
     harness.hydra.listener?.update({
       update: {
@@ -99,7 +99,7 @@ describe("cached session config", () => {
         ],
       },
     });
-    expect(state().config?.values).toEqual({ "acp.mode": "plan", "acp.agent": "claude-personal", "acp.tone": "high" });
+    expect(state().config?.values).toEqual({ "acp.mode": "plan", "acp.tone": "high" });
   });
 });
 
