@@ -99,6 +99,19 @@ export class ProtocolCore {
     return [...this.connections].some((connection) => connection.clientId === clientId);
   }
 
+  // A request to one connected client, for the methods the protocol lets a host send (resourceRead of a client-published URI).
+  requestClient(clientId: string, method: string, params: unknown, timeoutMs = 10_000): Promise<unknown> {
+    const connection = [...this.connections].find((candidate) => candidate.clientId === clientId && !candidate.closed);
+    if (!connection) {
+      return Promise.reject(new Error("the client is not connected"));
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`the client did not answer ${method} in time`)), timeoutMs);
+    });
+    return Promise.race([connection.peer.request(method, params), timeout]).finally(() => clearTimeout(timer));
+  }
+
   context(connection: Connection): ClientContext {
     return {
       clientId: connection.clientId ?? "",

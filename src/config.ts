@@ -31,6 +31,7 @@ export interface Config {
   configsPath: string;
   modelOptionsPath: string;
   endpointPath: string;
+  attachmentsPath: string;
   dirRoots: string[];
 }
 
@@ -90,6 +91,10 @@ export function flagsPath(env: NodeJS.ProcessEnv): string {
 
 export function modelsPath(env: NodeJS.ProcessEnv): string {
   return join(hydraHome(env), "extensions", "ahp", "models.json");
+}
+
+export function attachmentsPath(env: NodeJS.ProcessEnv): string {
+  return join(hydraHome(env), "extensions", "ahp", "attachments");
 }
 
 export function configsPath(env: NodeJS.ProcessEnv): string {
@@ -153,6 +158,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     configsPath: configsPath(env),
     modelOptionsPath: modelOptionsPath(env),
     endpointPath: endpointPath(env),
+    attachmentsPath: attachmentsPath(env),
     dirRoots: dirRoots(env),
   };
 }

@@ -5,10 +5,12 @@ import { HydraHttpError, type HydraSessionEntry, type HydraRest } from "../hydra
 import type { HydraSessions, QueueEvent, SessionListener, SteeringResult } from "../hydra/sessions.js";
 import type { ActionDecision } from "../protocol/backend.js";
 import type { ProtocolCore } from "../protocol/core.js";
+import type { AttachmentStore } from "../store/attachments.js";
 import { ErrorCodes, RpcError } from "../rpc/peer.js";
 import { logger } from "../util/log.js";
 import { sideChatOrigin, type Catalog } from "./catalog.js";
 import { ChatMapper, withModel, type Frame } from "./mapping.js";
+import { localizeAttachments } from "./attachments.js";
 import { UnsupportedContent, chooseOption, confirmationOptions, imageSupport, isApproval, promptCapabilities, toAcpPrompt } from "./prompt.js";
 import { modelConfigOf, optionIdOf, optionOfModelKey, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
@@ -124,6 +126,7 @@ export interface BridgeDeps {
   sessions: HydraSessions;
   permissionDelayMs?: number;
   edits?: EditContentStore;
+  attachments?: AttachmentStore;
 }
 
 const action = (value: Json) => value as never;
@@ -914,8 +917,8 @@ export class SessionBridge implements SessionListener {
   }
 
   // Client actions on this session's channels, one at a time so writes reach Hydra in the order they were accepted.
-  handleAction(channel: string, next: StateAction): Promise<ActionDecision> {
-    const work = this.writes.then(() => this.decide(channel, next));
+  handleAction(channel: string, next: StateAction, clientId?: string): Promise<ActionDecision> {
+    const work = this.writes.then(() => this.decide(channel, next, clientId));
     const after = (): Promise<void> | undefined => {
       const pending = this.followUp;
       this.followUp = undefined;
@@ -925,7 +928,7 @@ export class SessionBridge implements SessionListener {
     return work;
   }
 
-  private async decide(channel: string, next: StateAction): Promise<ActionDecision> {
+  private async decide(channel: string, next: StateAction, clientId?: string): Promise<ActionDecision> {
     // A held turn end or start would make this decision on a stale turn: a cancel could reach the turn after it.
     // Releasing one hold can start another steer, and so another hold, before this resumes.
     while (this.steerHold) {
@@ -956,7 +959,7 @@ export class SessionBridge implements SessionListener {
       case "session/titleChanged":
         return this.retitle(text(body.title) ?? "");
       case "chat/turnStarted": {
-        const decision = await this.startTurn(body);
+        const decision = await this.startTurn(body, clientId);
         if (decision.accept) {
           this.deps.catalog.noteTurn(this.deps.hydraId, Date.now());
         }
@@ -967,7 +970,7 @@ export class SessionBridge implements SessionListener {
       case "chat/toolCallConfirmed":
         return this.confirm(body);
       case "chat/pendingMessageSet":
-        return body.kind === "steering" ? this.setSteering(body) : this.setQueued(body);
+        return body.kind === "steering" ? this.setSteering(body, clientId) : this.setQueued(body, clientId);
       case "chat/pendingMessageRemoved":
         return body.kind === "steering" ? this.removeSteering(text(body.id) ?? "") : this.removeQueued(text(body.id) ?? "");
       case "chat/truncated":
@@ -1074,9 +1077,19 @@ export class SessionBridge implements SessionListener {
     return undefined;
   }
 
-  private promptFor(content: unknown): Json[] | string {
+  // Files the client attached are fetched from it first; a client that cannot serve one makes the message a refusal.
+  private async promptFor(content: unknown, clientId?: string): Promise<Json[] | string> {
     try {
-      return toAcpPrompt(content, promptCapabilities(this.meta));
+      const { attachments, core, hydraId } = this.deps;
+      const message =
+        attachments && clientId
+          ? await localizeAttachments(content, {
+              store: attachments,
+              hydraId,
+              read: async (uri) => bag(await core.requestClient(clientId, "resourceRead", { channel: "ahp-root://", uri, encoding: "base64" })) as never,
+            })
+          : content;
+      return toAcpPrompt(message, promptCapabilities(this.meta));
     } catch (err) {
       if (err instanceof UnsupportedContent) {
         return err.message;
@@ -1142,7 +1155,7 @@ export class SessionBridge implements SessionListener {
       .catch(() => undefined);
   }
 
-  private async startTurn(body: Json): Promise<ActionDecision> {
+  private async startTurn(body: Json, clientId?: string): Promise<ActionDecision> {
     const turnId = text(body.turnId);
     if (!turnId) {
       return refuse("the turn has no id");
@@ -1154,7 +1167,7 @@ export class SessionBridge implements SessionListener {
     if (blocked) {
       return refuse(blocked);
     }
-    const prompt = this.promptFor(body.message);
+    const prompt = await this.promptFor(body.message, clientId);
     if (typeof prompt === "string") {
       return refuse(prompt);
     }
@@ -1233,7 +1246,7 @@ export class SessionBridge implements SessionListener {
     return ACCEPT;
   }
 
-  private async setQueued(body: Json): Promise<ActionDecision> {
+  private async setQueued(body: Json, clientId?: string): Promise<ActionDecision> {
     const id = text(body.id);
     if (!id) {
       return refuse("the queued message has no id");
@@ -1242,7 +1255,7 @@ export class SessionBridge implements SessionListener {
     if (blocked) {
       return refuse(blocked);
     }
-    const prompt = this.promptFor(body.message);
+    const prompt = await this.promptFor(body.message, clientId);
     if (typeof prompt === "string") {
       return refuse(prompt);
     }
@@ -1300,7 +1313,7 @@ export class SessionBridge implements SessionListener {
   }
 
   // Steering goes to Hydra only while a turn runs; sent idle it is held and delivered once the next turn is under way.
-  private async setSteering(body: Json): Promise<ActionDecision> {
+  private async setSteering(body: Json, clientId?: string): Promise<ActionDecision> {
     const id = text(body.id);
     if (!id) {
       return refuse("the steering message has no id");
@@ -1312,7 +1325,7 @@ export class SessionBridge implements SessionListener {
     if (blocked) {
       return refuse(blocked);
     }
-    const prompt = this.promptFor(body.message);
+    const prompt = await this.promptFor(body.message, clientId);
     if (typeof prompt === "string") {
       return refuse(prompt);
     }

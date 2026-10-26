@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { applyDaemonListen, certExpiryNotice, certNames, fetchDaemonListen, isLoopbackHost, pickDisplayName, shadowedCertNotice } from "./hydra/daemon-listen.js";
 import { AhpListener } from "./server/listener.js";
 import { ChangesetService, type TurnFileEdit } from "./changesets/service.js";
+import { AttachmentStore } from "./store/attachments.js";
 import { FlagStore } from "./store/flags.js";
 import { TerminalService } from "./terminals/service.js";
 import { removeEndpoint, writeEndpoint } from "./store/endpoint.js";
@@ -25,6 +26,7 @@ import { ErrorCodes, RpcError } from "./rpc/peer.js";
 
 // VS Code drops and retakes chat subscriptions in bursts; detaching on each would replay the chat's history every time.
 const DETACH_GRACE_MS = 5_000;
+const ATTACHMENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 import { logger, setDebug } from "./util/log.js";
 
 const log = logger("app");
@@ -107,7 +109,9 @@ export async function startApp(initial: Config, version: string): Promise<App> {
     onSessionTotals: (uri, totals) => catalog.noteChanges(uri, totals),
     onWorkdirs: (uri, directories) => catalog.noteWorkdirs(uri, directories),
   });
-  const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, changesets, permissionDelayMs: config.permissionDelayMs });
+  const attachments = new AttachmentStore(config.attachmentsPath);
+  attachments.sweep(ATTACHMENT_MAX_AGE_MS);
+  const backend = new HydraBackend({ catalog, rest, extState, sessions, version, files, terminals, changesets, attachments, permissionDelayMs: config.permissionDelayMs });
   const core = new ProtocolCore({ backend, detachGraceMs: DETACH_GRACE_MS });
   await core.start();
 

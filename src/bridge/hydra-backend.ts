@@ -27,6 +27,7 @@ import { emptyChat } from "./replay.js";
 import { SessionBridge } from "./session-bridge.js";
 import { STATUS_IDLE, UNTITLED, entryToSummary, summaryToSessionState } from "./summary.js";
 import { randomUUID } from "node:crypto";
+import type { AttachmentStore } from "../store/attachments.js";
 
 const log = logger("backend");
 
@@ -51,6 +52,7 @@ export interface HydraBackendOptions {
   changesets?: ChangesetService;
   watches?: ResourceWatchService;
   permissionDelayMs?: number;
+  attachments?: AttachmentStore;
 }
 
 // Every file edit the turn's tool calls completed, in order.
@@ -100,6 +102,7 @@ export class HydraBackend implements Backend {
   private readonly watches: ResourceWatchService;
   private readonly edits = new EditContentStore();
   private readonly permissionDelayMs: number;
+  private readonly attachments: AttachmentStore | undefined;
 
   constructor(options: HydraBackendOptions) {
     this.catalog = options.catalog;
@@ -111,6 +114,7 @@ export class HydraBackend implements Backend {
     this.changesets = options.changesets;
     this.watches = options.watches ?? new ResourceWatchService({ files: options.files });
     this.permissionDelayMs = options.permissionDelayMs ?? 0;
+    this.attachments = options.attachments;
     this.serverInfo = { name: "hydra-ahp", version: options.version };
   }
 
@@ -171,6 +175,7 @@ export class HydraBackend implements Backend {
         sessions: this.sessions,
         permissionDelayMs: this.permissionDelayMs,
         edits: this.edits,
+        ...(this.attachments ? { attachments: this.attachments } : {}),
       });
       this.bridges.set(hydraId, bridge);
     }
@@ -373,7 +378,7 @@ export class HydraBackend implements Backend {
     if (!bridge) {
       return { accept: false, reason: "the session is not ready yet" };
     }
-    return bridge.handleAction(channel, request.action);
+    return bridge.handleAction(channel, request.action, request.client.clientId);
   }
 
   async handleCommand(method: string, params: unknown, client: ClientContext): Promise<unknown> {
@@ -545,6 +550,7 @@ export class HydraBackend implements Backend {
       throw new RpcError(ErrorCodes.InternalError, `Hydra could not delete the session: ${message(err)}`);
     }
     this.catalog.remove(hydraId);
+    this.attachments?.forget(hydraId);
   }
 
   // Same as deleting from Hydra: the agent stops for every attached client and a tombstone remains. Every chat of the session goes.
