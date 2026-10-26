@@ -35,11 +35,26 @@ const SESSION_NOT_FOUND = -32001;
 const NO_SUCH_PROVIDER = -32002;
 const SESSION_EXISTS = -32003;
 
-const FAILED_CHANNEL_LINGER_MS = 30_000;
+// A draft nobody disposed (its window closed) is dropped after this long without a subscriber.
+const DRAFT_MAX_AGE_MS = 60 * 60_000;
+const DRAFT_SWEEP_MS = 5 * 60_000;
 const MAX_IDLE_BRIDGES = 16;
 const INITIAL_WAIT_MS = 10 * 60_000;
 
 const action = (value: Record<string, unknown>) => value as never;
+
+// A session a client created that has had no turn yet: VS Code makes one for its new-session view ahead of time.
+// Like the built-in agents' provisional sessions, it is only channels until the first turn; Hydra hears of it then.
+interface Draft {
+  channel: string;
+  chat: string;
+  provider: string | undefined;
+  cwd: string | undefined;
+  picks: Record<string, string>;
+  createdAt: number;
+}
+
+const refuse = (reason: string): ActionDecision => ({ accept: false, reason });
 
 export interface HydraBackendOptions {
   catalog: Catalog;
@@ -96,6 +111,8 @@ export class HydraBackend implements Backend {
   private readonly sessions: HydraSessions;
   private readonly bridges = new Map<string, SessionBridge>();
   private readonly creating = new Map<string, Promise<void>>();
+  private readonly drafts = new Map<string, Draft>();
+  private readonly starting = new Map<string, Promise<string | undefined>>();
   private readonly files: FileService;
   private readonly terminals: TerminalService | undefined;
   private readonly changesets: ChangesetService | undefined;
@@ -133,6 +150,7 @@ export class HydraBackend implements Backend {
       }
     });
     await this.catalog.start(core);
+    setInterval(() => this.sweepDrafts(), DRAFT_SWEEP_MS).unref();
   }
 
   // The file edits in a turn of any of the session's chats, for its turn changeset; undefined when no chat holds the turn.
@@ -285,6 +303,12 @@ export class HydraBackend implements Backend {
       return;
     }
     if (isChangesetChannelUri(uri)) {
+      if (this.draftOwningChangeset(uri)) {
+        if (!this.core.store.has(uri)) {
+          this.core.createChannel(uri, { status: "ready", files: [] } as never);
+        }
+        return;
+      }
       this.changesets?.attach(uri);
       return;
     }
@@ -322,6 +346,10 @@ export class HydraBackend implements Backend {
       return;
     }
     if (isChangesetChannelUri(uri)) {
+      if (this.draftOwningChangeset(uri)) {
+        this.core.removeChannel(uri);
+        return;
+      }
       this.changesets?.detach(uri);
       return;
     }
@@ -350,7 +378,7 @@ export class HydraBackend implements Backend {
 
   // Session state only follows flags and input needs, so an unwatched channel is rebuilt from the current summary on the next subscribe.
   private dropIdleSession(uri: string): void {
-    if (!this.core.store.has(uri) || this.core.hasSubscribers(uri)) {
+    if (!this.core.store.has(uri) || this.core.hasSubscribers(uri) || this.drafts.has(uri)) {
       return;
     }
     const busy = this.catalog.membersOf(uri).some((id) => this.core.hasSubscribers(this.catalog.chatOf(id)) || this.bridges.get(id)?.isAttached);
@@ -370,6 +398,10 @@ export class HydraBackend implements Backend {
     }
     if (!isChatUri(channel) && !isSessionUri(channel)) {
       return { accept: false, reason: "this host does not accept that action" };
+    }
+    const draft = this.draftFor(channel);
+    if (draft) {
+      return this.handleDraftAction(draft, request);
     }
     // Clients may act on a session they just created before it is ready; hold the action until it is.
     await this.creating.get(channel);
@@ -486,17 +518,125 @@ export class HydraBackend implements Backend {
       Object.entries(offered.values).filter((pair): pair is [string, string] => typeof pair[1] === "string"),
     );
     const config = Object.keys(offered.values).length > 0 ? ({ schema: offered.schema, values: offered.values } as SessionConfigState) : undefined;
-    this.catalog.beginCreation(channel, summary);
     this.core.createChannel(channel, summaryToSessionState(summary, "creating", config));
     this.core.createChannel(chat, emptyChat(chat, summary.title, now, STATUS_IDLE));
-    const finishing = this.finishCreation(channel, provider, cwd, picks).finally(() => {
-      this.creating.delete(channel);
-    });
-    this.creating.set(channel, finishing);
+    this.drafts.set(channel, { channel, chat, provider, cwd, picks, createdAt: Date.now() });
     return null;
   }
 
-  private async finishCreation(channel: string, provider: string | undefined, cwd: string | undefined, picks: Record<string, string>): Promise<void> {
+  private draftFor(channel: string): Draft | undefined {
+    const draft = this.drafts.get(channel);
+    if (draft) {
+      return draft;
+    }
+    return isChatUri(channel) ? [...this.drafts.values()].find((entry) => entry.chat === channel) : undefined;
+  }
+
+  private draftOwningChangeset(uri: string): Draft | undefined {
+    const at = uri.indexOf("/changeset/");
+    return at < 0 ? undefined : this.drafts.get(uri.slice(0, at));
+  }
+
+  private dropDraft(draft: Draft): void {
+    this.drafts.delete(draft.channel);
+    this.core.removeChannel(draft.chat);
+    this.core.removeChannel(draft.channel);
+    for (const uri of this.core.store.uris()) {
+      if (uri.startsWith(`${draft.channel}/changeset/`)) {
+        this.core.removeChannel(uri);
+      }
+    }
+  }
+
+  private sweepDrafts(): void {
+    const cutoff = Date.now() - DRAFT_MAX_AGE_MS;
+    for (const draft of [...this.drafts.values()]) {
+      if (draft.createdAt < cutoff && !this.starting.has(draft.channel) && !this.core.hasSubscribers(draft.channel) && !this.core.hasSubscribers(draft.chat)) {
+        this.dropDraft(draft);
+      }
+    }
+  }
+
+  // What a client may do to a draft: change its settings, or send the first message, which starts the session.
+  private async handleDraftAction(draft: Draft, request: ActionRequest): Promise<ActionDecision> {
+    const next = request.action;
+    const body = next as unknown as Record<string, unknown>;
+    if (request.channel === draft.channel) {
+      if (next.type === "session/activeClientSet" || next.type === "session/activeClientRemoved") {
+        return { accept: true };
+      }
+      if (next.type === "session/configChanged") {
+        return this.setDraftConfig(draft, body);
+      }
+      return refuse("the session has not started yet");
+    }
+    if (next.type === "chat/draftChanged") {
+      return { accept: true };
+    }
+    if (next.type !== "chat/turnStarted") {
+      return refuse("the session has not started yet");
+    }
+    const failure = await this.startDraft(draft);
+    if (failure !== undefined) {
+      return refuse(`the session could not be started: ${failure}`);
+    }
+    const bridge = this.bridgeFor(request.channel);
+    if (!bridge) {
+      return refuse("the session is not ready yet");
+    }
+    return bridge.handleAction(request.channel, next, request.client.clientId);
+  }
+
+  private setDraftConfig(draft: Draft, body: Record<string, unknown>): ActionDecision {
+    const config = (this.core.store.state(draft.channel) as SessionState | undefined)?.config;
+    if (!config) {
+      return refuse("this session has no settings");
+    }
+    if (body.replace === true) {
+      return refuse("settings are changed one at a time");
+    }
+    const picks: Array<[string, string]> = [];
+    for (const [property, value] of Object.entries((body.config ?? {}) as Record<string, unknown>)) {
+      const schema = config.schema.properties[property];
+      if (!schema) {
+        return refuse(`unknown setting ${property}`);
+      }
+      if (typeof value !== "string" || !schema.enum?.includes(value)) {
+        return refuse(`${String(value)} is not a valid value for ${property}`);
+      }
+      picks.push([property, value]);
+    }
+    for (const [property, value] of picks) {
+      draft.picks[property] = value;
+    }
+    return { accept: true };
+  }
+
+  // One start per draft however many actions arrive; resolves to why it failed, or undefined.
+  private startDraft(draft: Draft): Promise<string | undefined> {
+    let work = this.starting.get(draft.channel);
+    if (!work) {
+      work = this.materialize(draft).then(
+        () => undefined,
+        (err) => {
+          log.warn(`starting ${draft.channel} failed`, message(err));
+          return message(err);
+        },
+      );
+      this.starting.set(draft.channel, work);
+      const held = work.then(() => undefined);
+      this.creating.set(draft.channel, held);
+      void work.finally(() => {
+        this.starting.delete(draft.channel);
+        this.creating.delete(draft.channel);
+      });
+    }
+    return work;
+  }
+
+  // The session's first turn: Hydra only hears of the session now, with the folder and settings the client ended up with.
+  private async materialize(draft: Draft): Promise<void> {
+    const { channel, chat, provider, cwd, picks } = draft;
     let hydraId: string | undefined;
     try {
       const created = await this.rest.createSession({
@@ -507,35 +647,25 @@ export class HydraBackend implements Backend {
       await this.extState.set(hydraId, AHP_URI_KEY, channel);
       const entry = await this.rest.getSession(hydraId);
       this.catalog.claim(hydraId, channel, entry);
-      this.core.publish(channel, action({ type: "session/ready" }));
-      const changesets = this.catalog.changesetsOf(channel);
-      if (changesets) {
-        this.core.publish(channel, action({ type: "session/changesetsChanged", changesets }));
+    } catch (err) {
+      if (hydraId) {
+        await this.rest.deleteSession(hydraId).catch(() => undefined);
       }
-      // A client may have subscribed to the chat while the session was being created.
-      const chat = defaultChatUri(channel);
-      if (this.core.hasSubscribers(chat) || Object.keys(picks).length > 0) {
-        await this.bridgeFor(chat)?.attach().catch((err) => {
-          log.warn(`attach after creating ${channel} failed`, message(err));
-        });
-      }
+      throw err;
+    }
+    this.drafts.delete(channel);
+    this.core.publish(channel, action({ type: "session/ready" }));
+    const changesets = this.catalog.changesetsOf(channel);
+    if (changesets) {
+      this.core.publish(channel, action({ type: "session/changesetsChanged", changesets }));
+    }
+    try {
+      await this.bridgeFor(chat)?.attach();
       if (Object.keys(picks).length > 0) {
         await this.bridgeFor(chat)?.applyInitialConfig(picks);
       }
     } catch (err) {
-      log.warn(`createSession ${channel} failed`, message(err));
-      if (hydraId) {
-        await this.rest.deleteSession(hydraId).catch(() => undefined);
-      }
-      this.catalog.failCreation(channel);
-      this.core.publish(
-        channel,
-        action({ type: "session/creationFailed", error: { errorType: "createSessionFailed", message: message(err) } }),
-      );
-      setTimeout(() => {
-        this.core.removeChannel(channel);
-        this.core.removeChannel(defaultChatUri(channel));
-      }, FAILED_CHANNEL_LINGER_MS).unref();
+      log.warn(`attach after starting ${channel} failed`, message(err));
     }
   }
 
@@ -556,6 +686,11 @@ export class HydraBackend implements Backend {
   // Same as deleting from Hydra: the agent stops for every attached client and a tombstone remains. Every chat of the session goes.
   private async disposeSession(params: Record<string, unknown>): Promise<null> {
     const channel = params.channel;
+    const draft = typeof channel === "string" ? this.draftFor(channel) : undefined;
+    if (draft) {
+      this.dropDraft(draft);
+      return null;
+    }
     const members = typeof channel === "string" ? this.catalog.membersOf(channel) : [];
     if (members.length === 0) {
       throw new RpcError(SESSION_NOT_FOUND, "Session not found");
@@ -569,6 +704,11 @@ export class HydraBackend implements Backend {
   // Deleting a session's last chat deletes the session.
   private async disposeChat(params: Record<string, unknown>): Promise<null> {
     const channel = params.channel;
+    const draft = typeof channel === "string" ? this.draftFor(channel) : undefined;
+    if (draft) {
+      this.dropDraft(draft);
+      return null;
+    }
     const hydraId = typeof channel === "string" ? this.catalog.resolveChat(channel) : undefined;
     if (!hydraId) {
       throw new RpcError(SESSION_NOT_FOUND, "Chat not found");

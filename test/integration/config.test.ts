@@ -4,6 +4,7 @@ import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.
 import { act } from "../support/harness.js";
 import { ScratchDaemon, until, WORK_DIR, WORK_URI } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
+import { defaultChatUri } from "../../src/bridge/ids.js";
 
 describe("an agent's config options as session settings against a scratch daemon", () => {
   let daemon: ScratchDaemon;
@@ -134,6 +135,16 @@ describe("an agent's config options as session settings against a scratch daemon
       workingDirectories: [WORK_URI],
       config: { "acp.tone": "high" },
     } as never);
+    const rows = async () => (await daemon.admin.listSessions({ includeNonInteractive: true })).sessions;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    expect((await rows()).some((row) => row.agentId === "fake-config" && !before.has(row.sessionId))).toBe(false);
+    const draftChat = defaultChatUri(channel);
+    await ahp.session.client.subscribe(channel);
+    await ahp.session.client.subscribe(draftChat);
+    ahp.session.client.dispatch(
+      draftChat,
+      act({ type: "chat/turnStarted", turnId: "first-config", startedAt: new Date().toISOString(), message: { text: "ping", origin: { kind: "user" } } }),
+    );
     const hydraId = await until("session created", async () => {
       const rows = (await daemon.admin.listSessions({ includeNonInteractive: true })).sessions;
       return rows.find((row) => row.agentId === "fake-config" && !before.has(row.sessionId))?.sessionId;

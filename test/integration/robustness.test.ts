@@ -377,23 +377,27 @@ describe("idle close and session GC against a scratch daemon", () => {
     expect(view.chat().turns.map((turn) => turn.message.text)).toEqual(["ping", "from hydra", "from ahp"]);
   });
 
-  it("drops a never-prompted session the GC collected while subscribed, and keeps prompted ones", async () => {
+  it("leaves a created session that never started to the client, and keeps prompted ones listed through their idle close", async () => {
     const channel = sessionOf("gc-unprompted");
     await ahp.session.client.request("createSession", { channel, provider: "fake", workingDirectories: [WORK_URI] } as never);
-    const view = await open("gc-unprompted");
+    const sub = await ahp.session.client.subscribe(channel);
+    const chat = (sub.result.snapshot?.state as { defaultChat: string }).defaultChat;
+    await ahp.session.client.subscribe(chat);
     const kept = await driver.newSession();
     await driver.prompt(kept, "ping");
 
-    await until(
-      "root/sessionRemoved",
-      () => ahp.session.notifications.find((n) => n.method === "root/sessionRemoved" && (n.params as { session: string }).session === channel),
-      30000,
-    );
+    // The daemon's GC and idle close run every second or so here; the unstarted session is not on Hydra for them to collect.
+    await cold(kept);
+    expect(ahp.session.notifications.some((n) => n.method === "root/sessionRemoved" && (n.params as { session: string }).session === channel)).toBe(false);
     expect(await listed(channel)).toBe(false);
-    await expect(ahp.session.client.subscribe(view.chatUri)).rejects.toMatchObject({ code: -32001 });
     expect(await listed(sessionOf(kept))).toBe(true);
-    // Its own idle close runs on its own timer, which can trail the unprompted session's collection.
-    await until(`${kept} cold`, async () => (await daemon.admin.getSession(kept)).status === "cold", 30000);
-    expect(await listed(sessionOf(kept))).toBe(true);
+
+    const { clientSeq } = ahp.session.client.dispatch(
+      chat,
+      { type: "chat/turnStarted", turnId: "late-1", startedAt: new Date().toISOString(), message: { text: "ping", origin: { kind: "user" } } } as never,
+    );
+    expect((await ahp.session.waitFor((e) => e.origin?.clientSeq === clientSeq, 15000)).rejectionReason).toBeUndefined();
+    await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete", 15000);
+    await until("listed after its first turn", async () => ((await listed(channel)) ? true : undefined));
   });
 });

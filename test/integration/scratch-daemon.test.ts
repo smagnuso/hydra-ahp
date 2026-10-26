@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@microsoft/agent-host-protocol";
-import { openSession } from "../support/harness.js";
+import { act, openSession } from "../support/harness.js";
 import { connectAhp, Driver, ROOT, type AhpConnection } from "../support/driver.js";
 import { ScratchDaemon, sleep, until, WORK_DIR, WORK_URI } from "../support/scratch.js";
 import { sessionOf } from "../support/chat-uri.js";
+import { defaultChatUri } from "../../src/bridge/ids.js";
 
 async function list(ahp: AhpConnection, params: Record<string, unknown> = {}) {
   return (await ahp.session.client.request("listSessions", { channel: ROOT, ...params } as never)) as unknown as {
@@ -113,27 +114,25 @@ describe("one scratch daemon", () => {
   describe("createSession and disposeSession", () => {
     const channel = "ahp-session:/vscode-made-1";
 
-    it("creates a Hydra session, stamps ahpUri and walks creating to ready", async () => {
-      const before = new Set((await daemon.admin.listSessions({ includeNonInteractive: true })).sessions.map((s) => s.sessionId));
+    const hydraRows = async () => (await daemon.admin.listSessions({ includeNonInteractive: true })).sessions;
+    const added = (uri: string) =>
+      ahp.session.notifications.some((n) => n.method === "root/sessionAdded" && (n.params as { summary: SessionSummary }).summary.resource === uri);
+
+    it("keeps a created session as channels until its first turn: nothing on Hydra, not listed, not announced", async () => {
+      const before = new Set((await hydraRows()).map((s) => s.sessionId));
       await ahp.session.client.request("createSession", {
         channel,
         provider: "fake",
         workingDirectories: [WORK_URI],
       } as never);
       const sub = await ahp.session.client.subscribe(channel);
-      const state = sub.result.snapshot?.state as { lifecycle: string };
-      if (state.lifecycle !== "ready") {
-        await ahp.session.waitFor((e) => e.channel === channel && e.action.type === "session/ready", 5000);
-      }
-      const created = await until("hydra session", async () => {
-        const page = await daemon.admin.listSessions({ includeNonInteractive: true });
-        return page.sessions.find((s) => !before.has(s.sessionId) && s.cwd === WORK_DIR && s.agentId === "fake");
-      });
-      expect(created.interactive).not.toBe(true);
-      const listed = (await list(ahp)).items.find((s) => s.resource === channel);
-      expect(listed?.provider).toBe("fake");
-      expect(ahp.session.notifications.some((n) => n.method === "root/sessionAdded" && (n.params as { summary: SessionSummary }).summary.resource === channel)).toBe(true);
-      await ahp.session.client.unsubscribe(channel);
+      const state = sub.result.snapshot?.state as { lifecycle: string; defaultChat: string };
+      expect(state.lifecycle).toBe("creating");
+      expect((await ahp.session.client.subscribe(state.defaultChat)).result.snapshot).toBeDefined();
+      await sleep(1500);
+      expect((await hydraRows()).filter((row) => !before.has(row.sessionId))).toEqual([]);
+      expect((await list(ahp)).items.some((s) => s.resource === channel)).toBe(false);
+      expect(added(channel)).toBe(false);
     });
 
     it("refuses a duplicate channel and an unknown provider", async () => {
@@ -141,6 +140,26 @@ describe("one scratch daemon", () => {
       await expect(
         ahp.session.client.request("createSession", { channel: "ahp-session:/other", provider: "nope" } as never),
       ).rejects.toMatchObject({ code: -32002 });
+    });
+
+    it("starts the Hydra session on its first turn, stamps ahpUri, lists it and announces it", async () => {
+      const before = new Set((await hydraRows()).map((s) => s.sessionId));
+      const chat = defaultChatUri(channel);
+      const { clientSeq } = ahp.session.client.dispatch(
+        chat,
+        act({ type: "chat/turnStarted", turnId: "first-1", startedAt: new Date().toISOString(), message: { text: "ping", origin: { kind: "user" } } }),
+      );
+      const echo = await ahp.session.waitFor((e) => e.origin?.clientSeq === clientSeq, 15000);
+      expect(echo.rejectionReason).toBeUndefined();
+      await ahp.session.waitFor((e) => e.channel === chat && e.action.type === "chat/turnComplete", 15000);
+      expect(ahp.session.events.some((e) => e.channel === channel && e.action.type === "session/ready")).toBe(true);
+      const created = (await hydraRows()).find((s) => !before.has(s.sessionId) && s.cwd === WORK_DIR && s.agentId === "fake");
+      expect(created?.interactive).toBe(true);
+      const listed = (await list(ahp)).items.find((s) => s.resource === channel);
+      expect(listed?.provider).toBe("fake");
+      expect(added(channel)).toBe(true);
+      await ahp.session.client.unsubscribe(chat);
+      await ahp.session.client.unsubscribe(channel);
     });
 
     it("keeps the unprompted session listed across an extension restart because of the stamp", async () => {
@@ -169,6 +188,16 @@ describe("one scratch daemon", () => {
       );
       expect((await list(ahp)).items.some((s) => s.resource === channel)).toBe(false);
       await expect(ahp.session.client.request("disposeSession", { channel } as never)).rejects.toMatchObject({ code: -32001 });
+    });
+    it("drops a session that never started without touching Hydra", async () => {
+      const draft = "ahp-session:/vscode-draft-2";
+      const before = new Set((await hydraRows()).map((s) => s.sessionId));
+      await ahp.session.client.request("createSession", { channel: draft, provider: "fake", workingDirectories: [WORK_URI] } as never);
+      await ahp.session.client.subscribe(draft);
+      await ahp.session.client.request("disposeSession", { channel: draft } as never);
+      await expect(ahp.session.client.subscribe(draft)).rejects.toBeDefined();
+      expect((await hydraRows()).filter((row) => !before.has(row.sessionId))).toEqual([]);
+      expect(ahp.session.notifications.some((n) => n.method === "root/sessionRemoved" && (n.params as { session: string }).session === draft)).toBe(false);
     });
   });
 

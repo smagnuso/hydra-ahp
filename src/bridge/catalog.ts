@@ -81,7 +81,6 @@ export class Catalog {
   private readonly sessionFlags = new Map<string, SessionFlags>();
   private readonly flagWrites = new Map<string, Promise<void>>();
   private readonly published = new Map<string, SessionSummary>();
-  private readonly pendingCreations = new Set<string>();
   private readonly flagListeners = new Set<(hydraId: string, flag: "isRead" | "isArchived", value: boolean) => void>();
   // Read marks sent to the daemon and not yet reflected by a poll, with when they were sent.
   private readonly readOverrides = new Map<string, { read: boolean; at: number }>();
@@ -366,7 +365,7 @@ export class Catalog {
   }
 
   uriInUse(uri: string): boolean {
-    return this.pendingCreations.has(uri) || this.groups.has(uri) || this.published.has(uri);
+    return this.groups.has(uri) || this.published.has(uri);
   }
 
   chatInUse(chat: string): boolean {
@@ -594,12 +593,6 @@ export class Catalog {
         : baseSummary;
       const changes = this.changeTotals.get(uri);
       next.set(uri, changes ? { ...summary, changes } : summary);
-    }
-    for (const uri of this.pendingCreations) {
-      const held = this.published.get(uri);
-      if (held && !next.has(uri)) {
-        next.set(uri, held);
-      }
     }
     const previous = new Map(this.published);
     this.published.clear();
@@ -862,27 +855,10 @@ export class Catalog {
     return { items };
   }
 
-  // Registers a session this extension is creating so the first poll cannot hide or duplicate it.
-  beginCreation(uri: string, summary: SessionSummary): void {
-    this.pendingCreations.add(uri);
-    this.pendingChats.set(defaultChatUri(uri), uri);
-    this.published.set(uri, summary);
-    this.core.notify(ROOT_URI, "root/sessionAdded", { channel: ROOT_URI, summary });
-  }
-
-  failCreation(uri: string): void {
-    this.pendingCreations.delete(uri);
-    this.pendingChats.delete(defaultChatUri(uri));
-    this.published.delete(uri);
-    this.core.notify(ROOT_URI, "root/sessionRemoved", { channel: ROOT_URI, session: uri });
-  }
-
   claim(hydraId: string, uri: string, entry: HydraSessionEntry): void {
     this.stamps.set(hydraId, uri);
     this.lookedUp.add(hydraId);
     this.entries.set(hydraId, entry);
-    this.pendingCreations.delete(uri);
-    this.pendingChats.delete(defaultChatUri(uri));
     this.reconcile();
   }
 

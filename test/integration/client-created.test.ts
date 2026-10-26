@@ -32,7 +32,7 @@ describe("a client-created session with a provider-scheme URI", () => {
     return result.items;
   }
 
-  it("creates it, lists it under the chosen URI and runs a turn dispatched right behind the chat subscribe", async () => {
+  it("creates it, runs a turn dispatched right behind the chat subscribe and lists it under the chosen URI", async () => {
     await ahp.session.client.request("createSession", {
       channel,
       provider: "fake",
@@ -41,9 +41,7 @@ describe("a client-created session with a provider-scheme URI", () => {
     const sub = await ahp.session.client.subscribe(channel);
     const state = sub.result.snapshot?.state as SessionState;
     expect(state.defaultChat).toMatch(/^ahp-chat:\//);
-    if (state.lifecycle !== "ready") {
-      await ahp.session.waitFor((e) => e.channel === channel && e.action.type === "session/ready", 5000);
-    }
+    expect(state.lifecycle).toBe("creating");
 
     const chat = state.defaultChat as string;
     const oracle = new ReducerOracle();
@@ -67,6 +65,8 @@ describe("a client-created session with a provider-scheme URI", () => {
     const finished = oracle.state(chat) as ChatState;
     const reply = finished.turns.at(-1)?.responseParts.flatMap((part) => (part.kind === "markdown" ? [part.content] : [])).join("");
     expect(reply).toContain("pong");
+    expect(ahp.session.events.some((e) => e.channel === channel && e.action.type === "session/ready")).toBe(true);
+    await until("listed", async () => (await items()).find((item) => item.resource === channel));
   });
 
   it("runs a turn dispatched before the new session is ready and streams it to a chat subscribed during creation", async () => {
