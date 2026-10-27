@@ -1,5 +1,5 @@
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import type { Changeset, ChangesetFile, ChangesetState } from "@microsoft/agent-host-protocol";
 import { cwdToUri } from "../bridge/ids.js";
 import type { ProtocolCore } from "../protocol/core.js";
@@ -371,7 +371,11 @@ export class ChangesetService {
       this.rememberEditContent(watchedSessionUri(uri), beforeUri, beforeText);
     }
     try {
-      if (!(await stat(file.path)).isFile()) {
+      const onDisk = await stat(file.path);
+      if (!onDisk.isFile()) {
+        afterUri = editContentUri(uri, fileUri, "after");
+      } else if (!created && recordedContent.usable && onDisk.size === Buffer.byteLength(beforeText) && (await readFile(file.path, "utf8")) === beforeText) {
+        // The edits are gone from disk (reset, checkout); show what the session wrote, not an empty diff.
         afterUri = editContentUri(uri, fileUri, "after");
       }
     } catch {
@@ -638,8 +642,8 @@ function recordedEditContent(hunks: SessionEdit["hunks"]): { before: string; aft
   }
   const snapshots = snapshotChain(hunks);
   if (snapshots) {
-    const bytes = Buffer.byteLength(snapshots.before) + Buffer.byteLength(snapshots.after);
-    return { ...snapshots, usable: bytes <= MAX_RECORDED_DIFF_BYTES, bounded: true };
+    const biggest = Math.max(Buffer.byteLength(snapshots.before), Buffer.byteLength(snapshots.after));
+    return { ...snapshots, usable: biggest <= MAX_CACHED_REVISION_ENTRY_BYTES, bounded: true };
   }
   const before = hunks.map((hunk) => hunk.oldText).join("");
   const after = hunks.map((hunk) => hunk.newText).join("");
@@ -661,15 +665,19 @@ function recordedEditContent(hunks: SessionEdit["hunks"]): { before: string; aft
 function snapshotChain(hunks: SessionEdit["hunks"]): { before: string; after: string } | undefined {
   const first = hunks[0];
   const last = hunks[hunks.length - 1];
-  if (!first || !last || hunks.length < 2 || hunks.some((hunk) => hunk.scope === "snippet")) {
+  if (!first || !last || hunks.some((hunk) => hunk.scope === "snippet")) {
     return undefined;
   }
   const tagged = hunks.every((hunk) => hunk.scope === "file");
+  if (hunks.length < 2 && !tagged) {
+    return undefined;
+  }
   const chained = hunks.every((hunk, index) => index === 0 || hunk.oldText === hunks[index - 1]?.newText || hunk.oldText === first.oldText);
   return tagged || chained ? { before: first.oldText, after: last.newText } : undefined;
 }
 
-const MAX_DIFF_CELLS = 4_000_000;
+// Past this many changed lines a diff is reported as a rewrite rather than computed.
+const MAX_DIFF_EDITS = 5_000;
 
 function splitLines(text: string): string[] {
   if (text === "") {
@@ -682,7 +690,8 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
-// Added and removed line counts between two texts; falls back to whole-side counts when the middle is too large to compare.
+// Added and removed line counts between two texts. The shortest edit script (Myers) is as long as the lines
+// that changed, so a few edits scattered through a large file cost little.
 function lineDiffCounts(before: string, after: string): { added: number; removed: number } {
   const a = splitLines(before);
   const b = splitLines(after);
@@ -698,19 +707,37 @@ function lineDiffCounts(before: string, after: string): { added: number; removed
   }
   const x = a.slice(start, endA);
   const y = b.slice(start, endB);
-  if (x.length * y.length > MAX_DIFF_CELLS) {
+  const edits = shortestEditLength(x, y, Math.min(x.length + y.length, MAX_DIFF_EDITS));
+  if (edits === undefined) {
     return { added: y.length, removed: x.length };
   }
-  let previous = new Array<number>(y.length + 1).fill(0);
-  for (const lineA of x) {
-    const row = new Array<number>(y.length + 1).fill(0);
-    for (let j = 1; j <= y.length; j += 1) {
-      row[j] = lineA === y[j - 1] ? (previous[j - 1] as number) + 1 : Math.max(previous[j] as number, row[j - 1] as number);
-    }
-    previous = row;
+  const delta = y.length - x.length;
+  return { added: (edits + delta) / 2, removed: (edits - delta) / 2 };
+}
+
+function shortestEditLength(a: string[], b: string[], limit: number): number | undefined {
+  const n = a.length;
+  const m = b.length;
+  if (n === 0 || m === 0) {
+    return n + m;
   }
-  const common = previous[y.length] as number;
-  return { added: y.length - common, removed: x.length - common };
+  const offset = limit + 1;
+  const reach = new Int32Array(2 * limit + 3);
+  for (let d = 0; d <= limit; d += 1) {
+    for (let k = -d; k <= d; k += 2) {
+      let i = k === -d || (k !== d && (reach[offset + k - 1] as number) < (reach[offset + k + 1] as number)) ? (reach[offset + k + 1] as number) : (reach[offset + k - 1] as number) + 1;
+      let j = i - k;
+      while (i < n && j < m && a[i] === b[j]) {
+        i += 1;
+        j += 1;
+      }
+      reach[offset + k] = i;
+      if (i >= n && j >= m) {
+        return d;
+      }
+    }
+  }
+  return undefined;
 }
 
 function addHunkSeparators(hunks: SessionEdit["hunks"], side: "oldText" | "newText"): string {

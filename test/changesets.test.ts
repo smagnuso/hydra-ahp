@@ -332,6 +332,81 @@ describe("changesets", () => {
     expect(viaEncoded.data).toBe(v0);
   });
 
+  it("keeps the before side of one large whole-file hunk and counts only what changed", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
+    const path = join(dir, "file.txt");
+    const v0 = Array.from({ length: 700 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    const v1 = v0.replace("line 3\n", "line three\nline 3b\n");
+    writeFileSync(path, v1);
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd: dir })];
+      hydra.edited.set("h1", [{ path, hunks: [{ oldText: v0, newText: v1, scope: "file" }] }]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const file = state().files[0];
+    expect(file?.edit.diff).toEqual({ added: 2, removed: 1 });
+    expect(file?.edit.before).toBeDefined();
+  });
+
+  it("serves a large whole-file edit with only the changed lines counted", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
+    const path = join(dir, "file.txt");
+    const pad = "x".repeat(90);
+    const v0 = Array.from({ length: 3500 }, (_, i) => `line ${i} ${pad}`).join("\n") + "\n";
+    const v1 = v0.replace("line 100 ", "line one hundred ").replace("line 3400 ", "line three thousand ");
+    writeFileSync(path, v1);
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd: dir })];
+      hydra.edited.set("h1", [{ path, hunks: [{ oldText: v0, newText: v1, scope: "file" }] }]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const file = state().files[0];
+    expect(file?.edit.diff).toEqual({ added: 2, removed: 2 });
+    expect(file?.edit.before).toBeDefined();
+  });
+
+  it("shows what the session wrote when its edits are no longer on disk", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
+    const path = join(dir, "file.txt");
+    const v0 = "one\ntwo\n";
+    const v1 = "one\ntwo\nthree\n";
+    writeFileSync(path, v0);
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd: dir })];
+      hydra.edited.set("h1", [{ path, hunks: [{ oldText: v0, newText: v1, scope: "file" }] }]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const file = state().files[0];
+    expect(file?.edit.diff).toEqual({ added: 1, removed: 0 });
+    expect(file?.edit.after?.content.uri).not.toBe(cwdToUri(path));
+    const after = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.after?.content.uri } as never) as unknown as { data: string };
+    expect(after.data).toBe(v1);
+  });
+
   it("does not collapse snippet hunks even when they chain", async () => {
     dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
     const path = join(dir, "file.txt");
