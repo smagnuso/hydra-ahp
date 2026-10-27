@@ -272,7 +272,7 @@ describe("changesets", () => {
         path,
         hunks: [
           { oldText: "/core", newText: "/ore" },
-          { oldText: "/ore", newText: "/core" },
+          { oldText: "/xyz", newText: "/core" },
         ],
       }]);
     }, { changesetPollMs: 50 });
@@ -294,6 +294,97 @@ describe("changesets", () => {
     expect(after.data).toBe("new line\n");
     const listed = (await session.client.request("listSessions", {} as never)) as unknown as { items: { resource: string; changes?: unknown }[] };
     expect(listed.items.find((item) => item.resource === SESSION)?.changes).toEqual({ additions: 2, deletions: 2, files: 1 });
+  });
+
+  it("collapses a chain of whole-file snapshots into one before and after with real line counts", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
+    const path = join(dir, "file.txt");
+    const v0 = Array.from({ length: 1200 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    const v1 = v0 + "extra\n";
+    const v2 = v1.replace("line 5\n", "line five\n");
+    writeFileSync(path, v2);
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd: dir })];
+      hydra.edited.set("h1", [{
+        path,
+        hunks: [
+          { oldText: v0, newText: v1 },
+          { oldText: v1, newText: v2 },
+        ],
+      }]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const file = state().files[0];
+    expect(file?.edit.diff).toEqual({ added: 2, removed: 1 });
+    const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.before?.content.uri } as never) as unknown as { data: string };
+    expect(before.data).toBe(v0);
+    expect(file?.edit.before?.content.uri).toContain(`${path}?`);
+    const encoded = (file?.edit.before?.content.uri ?? "").replace("?key=", "?key%3D");
+    const viaEncoded = await session.client.request("resourceRead", { channel: "ahp-root://", uri: encoded } as never) as unknown as { data: string };
+    expect(viaEncoded.data).toBe(v0);
+  });
+
+  it("does not collapse snippet hunks even when they chain", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
+    const path = join(dir, "file.txt");
+    writeFileSync(path, "c\n");
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd: dir })];
+      hydra.edited.set("h1", [{
+        path,
+        hunks: [
+          { oldText: "a", newText: "b", scope: "snippet" },
+          { oldText: "b", newText: "c", scope: "snippet" },
+        ],
+      }]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    expect(state().files[0]?.edit.before).toBeUndefined();
+  });
+
+  it("collapses whole-file hunks that do not chain", async () => {
+    dir = mkdtempSync(join(tmpdir(), "ahp-no-git-"));
+    const path = join(dir, "file.txt");
+    writeFileSync(path, "x\ny\nz\n");
+    harness = await startBridgeHarness((hydra) => {
+      hydra.rows = [ROW({ cwd: dir })];
+      hydra.edited.set("h1", [{
+        path,
+        hunks: [
+          { oldText: "x\n", newText: "x\ny\n", scope: "file" },
+          { oldText: "unrelated\n", newText: "x\ny\nz\n", scope: "file" },
+        ],
+      }]);
+    }, { changesetPollMs: 50 });
+
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c1", protocolVersions: ["0.9.0"] });
+    await session.client.subscribe(SESSION);
+    await session.client.subscribe(SESSION_CHANGES);
+    const state = (): ChangesetState => harness?.core.store.state(SESSION_CHANGES) as ChangesetState;
+    for (let tries = 0; tries < 100 && state().status !== "ready"; tries += 1) {
+      await sleep(20);
+    }
+    const file = state().files[0];
+    expect(file?.edit.diff).toEqual({ added: 2, removed: 0 });
+    const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.before?.content.uri } as never) as unknown as { data: string };
+    expect(before.data).toBe("x\n");
   });
 
   it("does not ask VS Code to diff synthetic content for oversized recorded hunks", async () => {

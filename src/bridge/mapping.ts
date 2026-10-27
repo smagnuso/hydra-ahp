@@ -793,7 +793,7 @@ export class ChatMapper {
       const n = index++;
       const fileUri = cwdToUri(path);
       const side = (name: "old" | "new", body: string): Json => {
-        const uri = editContentUri(edits.chatUri, toolCallId, n, name);
+        const uri = editContentUri(edits.chatUri, toolCallId, n, name, path);
         edits.put(uri, body);
         return { uri: fileUri, content: { uri } };
       };

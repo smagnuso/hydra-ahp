@@ -25,8 +25,8 @@ describe("edits in tool results", () => {
       content: [{ type: "diff", path: "/r/a.ts", oldText: "one\n", newText: "one\ntwo\n" }],
       _meta: { "hydra-acp": { editStats: [{ path: "/r/a.ts", added: 1, removed: 0 }] } },
     });
-    const before = editContentUri(CHAT, "tc1", 0, "old");
-    const after = editContentUri(CHAT, "tc1", 0, "new");
+    const before = editContentUri(CHAT, "tc1", 0, "old", "/r/a.ts");
+    const after = editContentUri(CHAT, "tc1", 0, "new", "/r/a.ts");
     expect(content).toEqual([
       {
         type: "fileEdit",
@@ -80,8 +80,8 @@ describe("multi-file patches", () => {
     });
     expect(content.map((block) => block.type)).toEqual(["fileEdit", "fileEdit", "text"]);
     expect(content[0]).toMatchObject({ diff: { added: 2, removed: 1 } });
-    expect(store.read(editContentUri(CHAT, "tc5", 0, "old"), undefined)).toMatchObject({ data: "keep\nold\n" });
-    expect(store.read(editContentUri(CHAT, "tc5", 0, "new"), undefined)).toMatchObject({ data: "keep\nnew\nmore\n" });
+    expect(store.read(editContentUri(CHAT, "tc5", 0, "old", "/r/a.ts"), undefined)).toMatchObject({ data: "keep\nold\n" });
+    expect(store.read(editContentUri(CHAT, "tc5", 0, "new", "/r/a.ts"), undefined)).toMatchObject({ data: "keep\nnew\nmore\n" });
     expect(content[1]?.before).toBeUndefined();
     expect(content[1]).toMatchObject({ after: { uri: cwdToUri("/r/b.ts") }, diff: { added: 1, removed: 0 } });
   });
@@ -102,7 +102,7 @@ describe("edits awaiting confirmation", () => {
       },
       [],
     );
-    const after = editContentUri(CHAT, "tc4", 0, "new");
+    const after = editContentUri(CHAT, "tc4", 0, "new", "/r/new.ts");
     expect(actions.find((a) => a.type === "chat/toolCallReady")).toMatchObject({
       invocationMessage: "Write new.ts",
       edits: { items: [{ after: { uri: cwdToUri("/r/new.ts"), content: { uri: after } }, diff: { added: 2, removed: 0 } }] },
@@ -113,6 +113,6 @@ describe("edits awaiting confirmation", () => {
 
 describe("EditContentStore", () => {
   it("refuses content it does not hold", () => {
-    expect(() => new EditContentStore().read(editContentUri(CHAT, "nope", 0, "old"), undefined)).toThrow();
+    expect(() => new EditContentStore().read(editContentUri(CHAT, "nope", 0, "old", "/w/file.ts"), undefined)).toThrow();
   });
 });

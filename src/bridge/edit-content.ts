@@ -9,8 +9,10 @@ export function isEditContentUri(uri: unknown): uri is string {
   return typeof uri === "string" && uri.startsWith("ahp-chat:") && uri.includes(SEGMENT);
 }
 
-export function editContentUri(chatUri: string, toolCallId: string, index: number, side: "old" | "new"): string {
-  return `${chatUri}${SEGMENT}${encodeURIComponent(toolCallId)}/${index}/${side}`;
+// The file's path ends the URI so a client labels the diff with it.
+export function editContentUri(chatUri: string, toolCallId: string, index: number, side: "old" | "new", path: string): string {
+  const label = path.split("/").filter((segment) => segment !== "").map(encodeURIComponent).join("/");
+  return `${chatUri}${SEGMENT}${encodeURIComponent(toolCallId)}/${index}/${side}/${label}`;
 }
 
 // The before and after text of the edits in mapped tool calls, served to resourceRead so a client can diff them.

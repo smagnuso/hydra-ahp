@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 export interface PatchedFile {
   path: string;
   created: boolean;
@@ -50,10 +52,13 @@ export function patchedFiles(update: Json): PatchedFile[] {
   const out: PatchedFile[] = [];
   for (const raw of files) {
     const file = bag(raw);
-    if (typeof file.filePath !== "string" || file.filePath === "" || typeof file.patch !== "string") {
+    // opencode names the file `filePath` in one version and a worktree-relative `file` in another; a
+    // relative path cannot be turned into a URI here, so only an absolute one is used.
+    const path = typeof file.filePath === "string" && file.filePath !== "" ? file.filePath : file.file;
+    if (typeof path !== "string" || !isAbsolute(path) || typeof file.patch !== "string") {
       continue;
     }
-    out.push({ path: file.filePath, created: file.type === "add", ...unfoldPatch(file.patch) });
+    out.push({ path, created: file.type === "add" || file.status === "added", ...unfoldPatch(file.patch) });
   }
   return out;
 }

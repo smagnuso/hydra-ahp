@@ -92,7 +92,8 @@ export interface TurnFileEdit {
 
 export interface SessionEdit {
   path: string;
-  hunks: Array<{ oldText: string; newText: string }>;
+  // scope says whether the texts are the whole file or a snippet; older daemons leave it out.
+  hunks: Array<{ oldText: string; newText: string; scope?: "file" | "snippet" }>;
   created?: boolean;
 }
 
@@ -379,8 +380,13 @@ export class ChangesetService {
     if (afterUri !== fileUri && recordedContent.usable) {
       this.rememberEditContent(watchedSessionUri(uri), afterUri, afterText);
     }
-    const added = file.hunks.reduce((total, hunk) => total + lineCount(hunk.newText), 0);
-    const removed = file.hunks.reduce((total, hunk) => total + lineCount(hunk.oldText), 0);
+    const chain = snapshotChain(file.hunks);
+    const { added, removed } = chain
+      ? lineDiffCounts(chain.before, chain.after)
+      : {
+          added: file.hunks.reduce((total, hunk) => total + lineCount(hunk.newText), 0),
+          removed: file.hunks.reduce((total, hunk) => total + lineCount(hunk.oldText), 0),
+        };
     return {
       id: fileUri,
       edit: {
@@ -446,26 +452,28 @@ export class ChangesetService {
   }
 
   private cachedEditContent(uri: string): CachedEditContent | undefined {
-    const content = this.editContents.get(uri);
+    const key = editContentKey(uri);
+    const content = this.editContents.get(key);
     if (!content) {
       return undefined;
     }
-    this.editContents.delete(uri);
-    this.editContents.set(uri, content);
+    this.editContents.delete(key);
+    this.editContents.set(key, content);
     return content;
   }
 
   private rememberEditContent(sessionUri: string, uri: string, text: string): void {
-    const previous = this.editContents.get(uri);
+    const key = editContentKey(uri);
+    const previous = this.editContents.get(key);
     if (previous) {
       this.editContentBytes -= Buffer.byteLength(previous.text);
-      this.editContents.delete(uri);
+      this.editContents.delete(key);
     }
-    this.editContents.set(uri, { sessionUri, text });
+    this.editContents.set(key, { sessionUri, text });
     this.editContentBytes += Buffer.byteLength(text);
     while (this.editContentBytes > MAX_CACHED_REVISION_BYTES || this.editContents.size > MAX_CACHED_REVISION_ENTRIES) {
       const oldest = this.editContents.keys().next().value;
-      if (oldest === undefined || oldest === uri) {
+      if (oldest === undefined || oldest === key) {
         break;
       }
       const evicted = this.editContents.get(oldest);
@@ -601,9 +609,24 @@ function revisionQuery(uri: string): URLSearchParams {
   }
 }
 
+// The path is only a label for the client; the key in the query is what identifies the content.
 function editContentUri(changesetUri: string, fileUri: string, side: "before" | "after"): string {
   const id = Buffer.from(JSON.stringify([changesetUri, fileUri, side])).toString("base64url");
-  return `${EDIT_SCHEME}${id}`;
+  return `${EDIT_SCHEME}${new URL(fileUri).pathname}?key=${id}`;
+}
+
+// VS Code hands the query back percent-encoded as a whole, '=' included, so content is keyed by the id alone.
+function editContentKey(uri: string): string {
+  const raw = uri.slice(uri.indexOf("?") + 1);
+  let query = raw;
+  if (!raw.startsWith("key=")) {
+    try {
+      query = decodeURIComponent(raw);
+    } catch {
+      return uri;
+    }
+  }
+  return query.startsWith("key=") ? query.slice("key=".length) : uri;
 }
 
 function recordedEditContent(hunks: SessionEdit["hunks"]): { before: string; after: string; usable: boolean; bounded: boolean } {
@@ -612,6 +635,11 @@ function recordedEditContent(hunks: SessionEdit["hunks"]): { before: string; aft
   }
   if (hunks.some((hunk) => hunk.oldText.includes("\0") || hunk.newText.includes("\0"))) {
     return { before: "", after: "", usable: false, bounded: false };
+  }
+  const snapshots = snapshotChain(hunks);
+  if (snapshots) {
+    const bytes = Buffer.byteLength(snapshots.before) + Buffer.byteLength(snapshots.after);
+    return { ...snapshots, usable: bytes <= MAX_RECORDED_DIFF_BYTES, bounded: true };
   }
   const before = hunks.map((hunk) => hunk.oldText).join("");
   const after = hunks.map((hunk) => hunk.newText).join("");
@@ -625,6 +653,64 @@ function recordedEditContent(hunks: SessionEdit["hunks"]): { before: string; aft
     usable: completeSnapshot && bounded,
     bounded,
   };
+}
+
+// Whole-file hunks compose into one: the first before and the last after are the session's change. A daemon
+// that does not tag scope leaves a chain (each edit starts from the previous result, or from the original
+// again after an outside reset) as the only sign of whole-file snapshots.
+function snapshotChain(hunks: SessionEdit["hunks"]): { before: string; after: string } | undefined {
+  const first = hunks[0];
+  const last = hunks[hunks.length - 1];
+  if (!first || !last || hunks.length < 2 || hunks.some((hunk) => hunk.scope === "snippet")) {
+    return undefined;
+  }
+  const tagged = hunks.every((hunk) => hunk.scope === "file");
+  const chained = hunks.every((hunk, index) => index === 0 || hunk.oldText === hunks[index - 1]?.newText || hunk.oldText === first.oldText);
+  return tagged || chained ? { before: first.oldText, after: last.newText } : undefined;
+}
+
+const MAX_DIFF_CELLS = 4_000_000;
+
+function splitLines(text: string): string[] {
+  if (text === "") {
+    return [];
+  }
+  const lines = text.split("\n");
+  if (text.endsWith("\n")) {
+    lines.pop();
+  }
+  return lines;
+}
+
+// Added and removed line counts between two texts; falls back to whole-side counts when the middle is too large to compare.
+function lineDiffCounts(before: string, after: string): { added: number; removed: number } {
+  const a = splitLines(before);
+  const b = splitLines(after);
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) {
+    start += 1;
+  }
+  let endA = a.length;
+  let endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA -= 1;
+    endB -= 1;
+  }
+  const x = a.slice(start, endA);
+  const y = b.slice(start, endB);
+  if (x.length * y.length > MAX_DIFF_CELLS) {
+    return { added: y.length, removed: x.length };
+  }
+  let previous = new Array<number>(y.length + 1).fill(0);
+  for (const lineA of x) {
+    const row = new Array<number>(y.length + 1).fill(0);
+    for (let j = 1; j <= y.length; j += 1) {
+      row[j] = lineA === y[j - 1] ? (previous[j - 1] as number) + 1 : Math.max(previous[j] as number, row[j - 1] as number);
+    }
+    previous = row;
+  }
+  const common = previous[y.length] as number;
+  return { added: y.length - common, removed: x.length - common };
 }
 
 function addHunkSeparators(hunks: SessionEdit["hunks"], side: "oldText" | "newText"): string {
