@@ -431,12 +431,18 @@ describe("file access", () => {
       mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
       mkdirSync(join(root, "vendor", ".git"), { recursive: true });
       const channel = await watch(session, { uri: u(root), recursive: true });
+      const probe = u(join(root, "probe.txt"));
+      for (let i = 0; i < 40 && !changes(session, channel).some((change) => change.uri === probe); i += 1) {
+        writeFileSync(join(root, "probe.txt"), String(i));
+        await tick(50);
+      }
       writeFileSync(join(root, "node_modules", "pkg", "index.js"), "x");
       writeFileSync(join(root, "vendor", ".git", "HEAD"), "x");
       writeFileSync(join(root, "own.txt"), "x");
       await seen(session, channel, u(join(root, "own.txt")), "added");
       await tick(150);
-      expect(changes(session, channel).map((change) => change.uri)).toEqual([u(join(root, "own.txt"))]);
+      const reported = changes(session, channel).map((change) => change.uri);
+      expect(reported.filter((uri) => uri.includes("/node_modules/") || uri.includes("/.git/"))).toEqual([]);
     });
 
     it("keeps overlapping watches independent while they share directory watchers", async () => {
