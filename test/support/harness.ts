@@ -85,7 +85,7 @@ export async function openSession(url: string, headers: Record<string, string> =
   const closed = new Promise<number>((resolve) => {
     ws.once("close", (code) => resolve(code));
   });
-  const client = new AhpClient(new WsClientTransport(ws), { requestTimeoutMs: 3000 });
+  const client = new AhpClient(new WsClientTransport(ws), { requestTimeoutMs: 10_000 });
   const events: ActionEnvelope[] = [];
   const notifications: Array<{ method: string; params: unknown }> = [];
   const waiters: Array<() => void> = [];
