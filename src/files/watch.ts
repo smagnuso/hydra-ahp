@@ -327,6 +327,9 @@ export class ResourceWatchService {
     }
     const existed = run.known.has(path);
     run.known.add(path);
+    if (existed && info.isDirectory()) {
+      return;
+    }
     changes.push({ uri: cwdToUri(path), type: existed ? ResourceChangeType.Updated : ResourceChangeType.Added });
     if (!existed && info.isDirectory() && run.state.recursive) {
       await this.addDirectory(uri, run, path, true);

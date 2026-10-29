@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChangesetState, SessionState } from "@microsoft/agent-host-protocol";
 import { workingChanges } from "../src/changesets/git.js";
@@ -326,7 +327,7 @@ describe("changesets", () => {
     expect(file?.edit.diff).toEqual({ added: 2, removed: 1 });
     const before = await session.client.request("resourceRead", { channel: "ahp-root://", uri: file?.edit.before?.content.uri } as never) as unknown as { data: string };
     expect(before.data).toBe(v0);
-    expect(file?.edit.before?.content.uri).toContain(`${path}?`);
+    expect(file?.edit.before?.content.uri).toContain(`${pathToFileURL(path).pathname}?`);
     const encoded = (file?.edit.before?.content.uri ?? "").replace("?key=", "?key%3D");
     const viaEncoded = await session.client.request("resourceRead", { channel: "ahp-root://", uri: encoded } as never) as unknown as { data: string };
     expect(viaEncoded.data).toBe(v0);
