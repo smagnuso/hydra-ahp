@@ -20,9 +20,12 @@ export interface WorkingChanges {
   files: ChangedFile[];
 }
 
+// Optional locks off, so polling never holds index.lock against the user's own git commands.
+const GIT_ENV = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
+
 function git(cwd: string, args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, maxBuffer: MAX_BUFFER, encoding: "buffer" }, (err, stdout) => {
+    execFile("git", args, { cwd, env: GIT_ENV, maxBuffer: MAX_BUFFER, encoding: "buffer" }, (err, stdout) => {
       if (err) {
         reject(err);
         return;
