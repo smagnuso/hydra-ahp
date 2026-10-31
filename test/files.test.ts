@@ -383,12 +383,22 @@ describe("file access", () => {
       return created.channel;
     }
 
+    // The OS watcher can start after the subscribe returns (seen on macOS), so write a probe until it is reported.
+    async function ready(session: Session, channel: string, dir: string, name = "ready.txt"): Promise<void> {
+      const probe = u(join(dir, name));
+      for (let i = 0; i < 40 && !changes(session, channel).some((change) => change.uri === probe); i += 1) {
+        writeFileSync(join(dir, name), String(i));
+        await tick(50);
+      }
+    }
+
     it("reports files added, changed and deleted under a recursive watch", async () => {
       const session = await connectSession("scoped");
       const root = join(proj, "watched");
       mkdirSync(join(root, "sub"), { recursive: true });
       const channel = await watch(session, { uri: u(root), recursive: true });
       expect(channel).toMatch(/^ahp-resource-watch:\/[0-9a-f]+$/);
+      await ready(session, channel, root);
       const file = join(root, "sub", "one.txt");
       writeFileSync(file, "1");
       await seen(session, channel, u(file), "added");
@@ -403,6 +413,7 @@ describe("file access", () => {
       const root = join(proj, "growing");
       mkdirSync(root, { recursive: true });
       const channel = await watch(session, { uri: u(root), recursive: true });
+      await ready(session, channel, root);
       mkdirSync(join(root, "later"));
       await seen(session, channel, u(join(root, "later")), "added");
       const file = join(root, "later", "x.txt");
@@ -416,13 +427,15 @@ describe("file access", () => {
       mkdirSync(join(root, "skip"), { recursive: true });
       mkdirSync(join(root, ".git"), { recursive: true });
       const channel = await watch(session, { uri: u(root), recursive: true, excludes: { items: ["**/skip/**"] }, includes: { items: ["**/*.ts"] } });
+      await ready(session, channel, root, "ready.ts");
       writeFileSync(join(root, "skip", "a.ts"), "a");
       writeFileSync(join(root, ".git", "b.ts"), "b");
       writeFileSync(join(root, "c.txt"), "c");
       writeFileSync(join(root, "d.ts"), "d");
       await seen(session, channel, u(join(root, "d.ts")), "added");
       await tick(150);
-      expect(changes(session, channel).map((change) => change.uri)).toEqual([u(join(root, "d.ts"))]);
+      const reported = changes(session, channel).map((change) => change.uri);
+      expect(reported.filter((uri) => uri !== u(join(root, "ready.ts")))).toEqual([u(join(root, "d.ts"))]);
     });
 
     it("skips installed packages and nested repositories without being asked", async () => {
@@ -431,11 +444,7 @@ describe("file access", () => {
       mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
       mkdirSync(join(root, "vendor", ".git"), { recursive: true });
       const channel = await watch(session, { uri: u(root), recursive: true });
-      const probe = u(join(root, "probe.txt"));
-      for (let i = 0; i < 40 && !changes(session, channel).some((change) => change.uri === probe); i += 1) {
-        writeFileSync(join(root, "probe.txt"), String(i));
-        await tick(50);
-      }
+      await ready(session, channel, root);
       writeFileSync(join(root, "node_modules", "pkg", "index.js"), "x");
       writeFileSync(join(root, "vendor", ".git", "HEAD"), "x");
       writeFileSync(join(root, "own.txt"), "x");
@@ -466,6 +475,7 @@ describe("file access", () => {
       const root = join(proj, "flat");
       mkdirSync(join(root, "deep"), { recursive: true });
       const channel = await watch(session, { uri: u(root) });
+      await ready(session, channel, root);
       writeFileSync(join(root, "deep", "inner.txt"), "i");
       writeFileSync(join(root, "top.txt"), "t");
       await seen(session, channel, u(join(root, "top.txt")), "added");
