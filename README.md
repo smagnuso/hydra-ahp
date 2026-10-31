@@ -87,14 +87,22 @@ one. Then, in either window:
 - **Agents window** (`code-insiders --agents`, or **Open Agents Window**):
   run **Add Remote Agent Host...** from the command palette, paste the URL and
   give the host a name.
-- **Editor window**: add an entry to `chat.remoteAgentHosts` in `settings.json`
-  and reload. `hydra-ahp token mint vscode` prints the entry ready to paste:
+- **Editor window** (Insiders 1.145 or later): add an entry to
+  `chat.workspaceRemoteAgentHosts` in `settings.json` (user settings, or a
+  workspace's `.vscode/settings.json`) and reload. `hydra-ahp token mint
+  vscode` prints the entry ready to paste:
 
   ```json
-  "chat.remoteAgentHosts": [
+  "chat.workspaceRemoteAgentHosts": [
     { "address": "127.0.0.1:55590", "name": "vscode", "connectionToken": "..." }
   ]
   ```
+
+  Editor windows use this list instead of `chat.remoteAgentHosts`, which stays
+  the Agents window's list, so serve both windows with an entry in each. The
+  setting only applies in trusted workspaces. VS Code sends no folder to these
+  hosts, so a chat started in an editor window begins in hydra's default
+  directory, not the folder the window has open; the Agents window passes it.
 
 Your hydra sessions then appear in VS Code's session list under the hydra
 host. Sessions show once they have had a real prompt; hydra hides
@@ -129,8 +137,9 @@ level, mint a new one and revoke the old one.
 
 VS Code keeps `connectionToken` in plain text in `settings.json`. If Settings
 Sync includes that file, the token travels to your other machines and the sync
-service. Exclude `chat.remoteAgentHosts` from Settings Sync (Settings Sync:
-Configure, then ignore the setting).
+service. Exclude `chat.remoteAgentHosts` and `chat.workspaceRemoteAgentHosts`
+from Settings Sync (Settings Sync: Configure, then ignore the settings). Keep
+the token out of a workspace's `.vscode/settings.json`, which is easy to commit.
 
 ## Using it
 
