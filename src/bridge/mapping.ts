@@ -345,6 +345,9 @@ export class ChatMapper {
     return this.turn?.id;
   }
 
+  // When the latest turn this mapper has seen end did so, so a busy report older than that can be told apart.
+  lastEndedAt: number | undefined;
+
   // The turn Hydra knows the active one as, which a steer split leaves behind.
   get activeOriginId(): string | undefined {
     return this.turn?.origin ?? this.turn?.id;
@@ -1008,6 +1011,7 @@ export class ChatMapper {
       return NO_ACTIONS;
     }
     this.turn = undefined;
+    this.lastEndedAt = at;
     const actions: Json[] = [...this.flushLinks()];
     const plan = turn.calls.get(planId(turn.id));
     if (plan && !plan.finished) {

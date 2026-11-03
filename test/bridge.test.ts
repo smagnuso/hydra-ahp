@@ -199,6 +199,23 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     expect(chat.turns).toHaveLength(3);
   });
 
+  it("does not open a turn for a busy report that predates the turn's end in the replay", async () => {
+    harness = await startBridgeHarness((hydra) => {
+      hydra.newest = {
+        entries: [
+          { method: "session/update", params: { update: { sessionUpdate: "prompt_received", messageId: "p", prompt: [{ type: "text", text: "x" }] } }, recordedAt: 1_800_000_000_005, seq: 5 },
+          { method: "session/update", params: { update: { sessionUpdate: "turn_complete", stopReason: "end_turn" } }, recordedAt: 1_800_000_000_105, seq: 6 },
+        ],
+        hasMore: false,
+      };
+      // The attach answered while the turn ran; the history page fetched after it already holds the end.
+      hydra.meta = { busy: true, turnStartedAt: 1_800_000_000_005 };
+    });
+    const { chat } = await open(harness, version);
+    expect(chat.activeTurn).toBeUndefined();
+    expect(chat.turns[0]).toMatchObject({ id: "p", state: "complete" });
+  });
+
   it("closes a turn the replay left open when Hydra says the session is not busy", async () => {
     harness = await startBridgeHarness((hydra) => {
       hydra.newest = {

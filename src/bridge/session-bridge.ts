@@ -494,7 +494,11 @@ export class SessionBridge implements SessionListener {
     const busy = meta.busy === true;
     if (busy && !this.mapper.activeTurnId) {
       const startedAt = typeof meta.turnStartedAt === "number" ? meta.turnStartedAt : undefined;
-      sink(this.mapper.openFromBusy(startedAt ?? (this.mapper.lastFrameAt || Date.now())));
+      // The attach answered before the history was fetched, so the turn it called busy may have ended since; a phantom turn would never close.
+      const endedSince = startedAt !== undefined && this.mapper.lastEndedAt !== undefined && this.mapper.lastEndedAt >= startedAt;
+      if (!endedSince) {
+        sink(this.mapper.openFromBusy(startedAt ?? (this.mapper.lastFrameAt || Date.now())));
+      }
     } else if (!busy && this.mapper.activeTurnId) {
       sink(this.mapper.closeActive("cancelled"));
     }
