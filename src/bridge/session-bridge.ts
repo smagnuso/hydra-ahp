@@ -437,6 +437,7 @@ export class SessionBridge implements SessionListener {
     this.noteModelConfig(parseConfigOptions(configOptions));
     this.noteModel(text(meta.currentModel) ?? parseConfigOptions(configOptions).find((option) => option.id === "model")?.currentValue);
     stampLatestTurn(produced, this.model, this.modelConfig);
+    const replayOpen = this.mapper.activeTurnId;
     this.buffering = undefined;
     for (const event of pending) {
       if (event.kind !== "permission") {
@@ -446,7 +447,7 @@ export class SessionBridge implements SessionListener {
     this.armRelease();
     this.highWater = undefined;
     collect(this.mapper.syncQueue(this.foreignQueue(meta.queue)));
-    this.midTurn(meta, collect);
+    this.midTurn(meta, replayOpen, collect);
     // Hydra replays still-open permissions during the attach, before the subscriber that caused it has joined.
     for (const event of pending) {
       if (event.kind === "permission") {
@@ -490,7 +491,7 @@ export class SessionBridge implements SessionListener {
   }
 
   // The attach-mid-turn rule: a busy session with no start event seen still gets an active turn.
-  private midTurn(meta: Json, sink: (actions: Json[]) => void): void {
+  private midTurn(meta: Json, replayOpen: string | undefined, sink: (actions: Json[]) => void): void {
     const busy = meta.busy === true;
     if (busy && !this.mapper.activeTurnId) {
       const startedAt = typeof meta.turnStartedAt === "number" ? meta.turnStartedAt : undefined;
@@ -499,7 +500,8 @@ export class SessionBridge implements SessionListener {
       if (!endedSince) {
         sink(this.mapper.openFromBusy(startedAt ?? (this.mapper.lastFrameAt || Date.now())));
       }
-    } else if (!busy && this.mapper.activeTurnId) {
+    } else if (!busy && this.mapper.activeTurnId !== undefined && this.mapper.activeTurnId === replayOpen) {
+      // Only a turn the replay left open is stale; one that began during the attach started after this report.
       sink(this.mapper.closeActive("cancelled"));
     }
     const turnId = this.mapper.activeTurnId;

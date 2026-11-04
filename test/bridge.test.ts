@@ -317,6 +317,20 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     expect(chat.activeTurn).toMatchObject({ id: "racing", responseParts: [{ kind: "markdown", content: "partial" }] });
   });
 
+  it("keeps a turn that started while attaching when the attach reported the session idle", async () => {
+    harness = await startBridgeHarness((hydra) => {
+      hydra.newest = { entries: [], hasMore: false };
+      // Answered before the prompt below was sent, so it is out of date by the time the history is in.
+      hydra.meta = { busy: false };
+      hydra.early = [stamped({ sessionUpdate: "prompt_received", messageId: "racing", prompt: [{ type: "text", text: "now" }] }, maxSeq + 5)];
+    });
+    const { session, oracle } = await open(harness, version);
+    settle(session, oracle);
+    const chat = oracle.state(CHAT) as ChatState;
+    expect(chat.turns.map((turn) => turn.state)).not.toContain("cancelled");
+    expect(chat.activeTurn).toMatchObject({ id: "racing" });
+  });
+
   it("closes the active turn on session/closed and re-attaches when the session is warm again", async () => {
     harness = await startBridgeHarness((hydra) => {
       hydra.newest = newest;
