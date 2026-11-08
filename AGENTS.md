@@ -283,8 +283,18 @@ read it with a small script, not `grep -o` with long contexts.
   Never spawn a bare npm-installed command on Windows; use `resolveSpawnTarget`
   (a copy of the CLI's, keep it in step), pass `shell: target.shell`, use the
   returned already-quoted args, and handle the throw from `quoteForCmd`. The
-  Tailscale cert flow still calls `sudo` and `chown`, which do not exist on
-  Windows.
+  Tailscale cert flow is platform-aware: on Windows a permission failure returns
+  an "elevate and rerun" error and never spawns `sudo` or `chown`, and the wizard
+  text comes from helpers that take the platform.
+- **Atomic writes in `src/store` go through `renameWithRetry`**
+  (`store/rename-retry.ts`, a copy of the budgeter's). A bare `renameSync` fails
+  with EPERM, EBUSY or EACCES on Windows when another handle (antivirus, the
+  token store's polling re-read) holds the target.
+- **`endpoint.json` records the writer's `pid`, and readers go through
+  `readEndpoint`.** A hard kill (Windows `SIGTERM`) skips `removeEndpoint`, so
+  `readEndpoint` drops a record whose pid is gone and the `url` command falls
+  back to its env-derived address. A record with no pid (an older version) is
+  trusted.
 
 ## Updating this file
 
