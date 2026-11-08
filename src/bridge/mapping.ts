@@ -238,9 +238,13 @@ function inline(value: string): string {
   return `\`${one.length > LABEL_MAX ? `${one.slice(0, LABEL_MAX - 1)}…` : one}\``;
 }
 
-function shortPath(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  return path.startsWith("/") && parts.length > 3 ? `…/${parts.slice(-3).join("/")}` : path;
+const SEPARATORS = /[\\/]/;
+const DRIVE_PREFIX = /^[A-Za-z]:[\\/]/;
+
+export function shortPath(path: string): string {
+  const parts = path.split(SEPARATORS).filter(Boolean);
+  const absolute = SEPARATORS.test(path.charAt(0)) || DRIVE_PREFIX.test(path) || isAbsolute(path);
+  return absolute && parts.length > 3 ? `…/${parts.slice(-3).join("/")}` : path;
 }
 
 // Some agents (opencode) name a call with just its tool ("grep") and send what it searches or reads only in a later

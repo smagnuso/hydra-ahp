@@ -48,7 +48,7 @@ function numberFrom(env: NodeJS.ProcessEnv, key: string): number | undefined {
 }
 
 function expandHome(path: string): string {
-  return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
+  return path === "~" || path.startsWith("~/") || path.startsWith("~\\") ? join(homedir(), path.slice(1)) : path;
 }
 
 function tlsFrom(env: NodeJS.ProcessEnv): TlsConfig | undefined {
