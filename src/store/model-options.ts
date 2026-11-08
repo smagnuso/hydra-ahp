@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { renameWithRetry } from "./rename-retry.js";
 import { parseConfigOptions, type ConfigOption } from "../bridge/config.js";
 
 // The effort-like options an agent offered while a given model was selected; their choices differ by model.
@@ -55,6 +56,6 @@ export class ModelOptionStore {
     const tmp = `${this.path}.tmp`;
     const out = Object.fromEntries([...this.options].map(([agentId, models]) => [agentId, Object.fromEntries(models)]));
     writeFileSync(tmp, JSON.stringify(out, null, 2), { mode: 0o600 });
-    renameSync(tmp, this.path);
+    renameWithRetry(tmp, this.path);
   }
 }

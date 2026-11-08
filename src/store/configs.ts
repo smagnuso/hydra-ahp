@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { renameWithRetry } from "./rename-retry.js";
 import { parseConfigOptions, type ConfigOption } from "../bridge/config.js";
 
 // Like model lists, an agent's config options only show up once a session of it exists, so the last set seen is kept per agent.
@@ -49,7 +50,7 @@ export class ConfigStore {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     const tmp = `${this.path}.tmp`;
     writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.configs), null, 2), { mode: 0o600 });
-    renameSync(tmp, this.path);
+    renameWithRetry(tmp, this.path);
   }
 }
 

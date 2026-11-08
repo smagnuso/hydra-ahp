@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { renameWithRetry } from "./rename-retry.js";
 
 export type FileLevel = "scoped" | "read" | "full";
 
@@ -192,7 +193,7 @@ export class TokenRegistry {
     writeFileSync(tmp, `${JSON.stringify({ tokens: this.entries }, null, 2)}\n`, {
       mode: 0o600,
     });
-    renameSync(tmp, this.path);
+    renameWithRetry(tmp, this.path);
     this.signature = this.fileSignature();
   }
 }

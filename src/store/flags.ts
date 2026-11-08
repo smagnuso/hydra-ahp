@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { renameWithRetry } from "./rename-retry.js";
 
 // isRead is the daemon's read state for the session (its row's `unread`), never stored here; only done marks are.
 export interface SessionFlags {
@@ -94,6 +95,6 @@ export class FlagStore {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
     const tmp = `${this.path}.tmp`;
     writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.flags), null, 2), { mode: 0o600 });
-    renameSync(tmp, this.path);
+    renameWithRetry(tmp, this.path);
   }
 }
