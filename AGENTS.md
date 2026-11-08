@@ -269,6 +269,22 @@ read it with a small script, not `grep -o` with long contexts.
 - **Hydra snapshots extension config at boot**: changing an extension's
   `env` needs `extension remove` + `add --env` then `start` (or a daemon
   restart); `extension restart` keeps the old env.
+- **Treat every path as possibly Windows-shaped, whatever host this runs on.**
+  A cwd, a tool-call path or a session field can arrive as `C:\x`, `C:/x`, a
+  mix, or UNC from a daemon on Windows, even when this code runs on Linux. Never
+  split, prefix-match or find the last separator with a hard-coded `/` on a
+  filesystem path; use `path.relative`, `isAbsolute` and `basename` (URLs and
+  ids are not paths). Containment is `path.relative` plus a first-segment `..`
+  test, never a string prefix. Windows shows full paths, never `~`; expand `~`,
+  `~/` and `~\` on input only. The full checklist (spawning, renames, signals,
+  testing) is in the `hydra-acp/cli` AGENTS.md under "Treat every path as
+  possibly Windows-shaped".
+- **Windows spawn rules** (`src/util/windows-command.ts`, `src/setup/restart.ts`).
+  Never spawn a bare npm-installed command on Windows; use `resolveSpawnTarget`
+  (a copy of the CLI's, keep it in step), pass `shell: target.shell`, use the
+  returned already-quoted args, and handle the throw from `quoteForCmd`. The
+  Tailscale cert flow still calls `sudo` and `chown`, which do not exist on
+  Windows.
 
 ## Updating this file
 
