@@ -1,9 +1,9 @@
-import { spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { confPath, DEFAULT_PORT, hydraHome } from "../config.js";
 import { readConf, writeConf } from "./conf.js";
+import { restartExtension } from "./restart.js";
 import {
   CERTS_UNAVAILABLE_MESSAGE,
   ensurePrivateDir,
@@ -130,9 +130,11 @@ export async function runTailscaleSetup(env: NodeJS.ProcessEnv = process.env): P
   } else if (!(await confirm(`Restart the ${EXTENSION_NAME} extension now?`, true))) {
     say(`Skipped. Apply later with: hydra-acp extension restart ${EXTENSION_NAME}`);
   } else {
-    const result = spawnSync("hydra-acp", ["extension", "restart", EXTENSION_NAME], { stdio: "inherit" });
-    if (result.status === 0) {
+    const result = restartExtension(EXTENSION_NAME);
+    if (result.kind === "restarted") {
       ok("Restarted.");
+    } else if (result.kind === "unquotable") {
+      warn(`Couldn't run hydra-acp (${result.message}). Restart manually if needed.`);
     } else {
       warn(`hydra-acp exited with code ${result.status ?? "?"}. Restart manually if needed.`);
     }
