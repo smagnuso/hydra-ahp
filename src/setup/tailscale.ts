@@ -93,15 +93,22 @@ export type MintResult =
   | { kind: "declined-sudo" }
   | { kind: "error"; message: string };
 
+export const ELEVATION_REQUIRED_MESSAGE =
+  "tailscale cert needs elevated access. Windows has no sudo: rerun this setup from an elevated (Administrator) prompt.";
+
 export async function mintTailscaleCert(opts: {
   dnsName: string;
   certPath: string;
   keyPath: string;
   // Asked only when plain `tailscale cert` hits a permission error.
   confirmSudo: () => Promise<boolean>;
+  platform?: NodeJS.Platform;
+  spawn?: typeof spawnSync;
 }): Promise<MintResult> {
+  const platform = opts.platform ?? process.platform;
+  const spawn = opts.spawn ?? spawnSync;
   const certArgs = ["cert", "--cert-file", opts.certPath, "--key-file", opts.keyPath, opts.dnsName];
-  const attempt = spawnSync("tailscale", certArgs, { encoding: "utf8" });
+  const attempt = spawn("tailscale", certArgs, { encoding: "utf8" });
   if (attempt.status === 0) {
     return { kind: "ok", usedSudo: false, chownFailed: false };
   }
@@ -112,12 +119,15 @@ export async function mintTailscaleCert(opts: {
   if (!isPermissionError(stderr)) {
     return { kind: "error", message: `tailscale cert failed: ${stderr || "unknown error"}` };
   }
+  if (platform === "win32") {
+    return { kind: "error", message: ELEVATION_REQUIRED_MESSAGE };
+  }
   if (!(await opts.confirmSudo())) {
     return { kind: "declined-sudo" };
   }
   // stdin stays on the terminal so sudo can prompt; stderr is captured so a
   // certs-unavailable failure is still recognizable.
-  const sudoAttempt = spawnSync("sudo", ["tailscale", ...certArgs], {
+  const sudoAttempt = spawn("sudo", ["tailscale", ...certArgs], {
     stdio: ["inherit", "pipe", "pipe"],
     encoding: "utf8",
   });
@@ -132,7 +142,7 @@ export async function mintTailscaleCert(opts: {
     };
   }
   // tailscale ran as root and owns the files; the daemon runs as this user.
-  const chown = spawnSync("sudo", ["chown", userInfo().username, opts.certPath, opts.keyPath], {
+  const chown = spawn("sudo", ["chown", userInfo().username, opts.certPath, opts.keyPath], {
     stdio: "inherit",
   });
   return { kind: "ok", usedSudo: true, chownFailed: chown.status !== 0 };

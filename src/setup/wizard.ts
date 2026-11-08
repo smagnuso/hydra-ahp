@@ -40,6 +40,43 @@ function header(num: number, title: string): void {
   process.stdout.write(`\n  ${BOLD}[${num}/4] ${title}${RESET}\n\n`);
 }
 
+export function operatorHint(platform: NodeJS.Platform): string {
+  return platform === "win32"
+    ? "Rerun this setup from an elevated (Administrator) prompt."
+    : "Fix this permanently: sudo tailscale set --operator=$(whoami)";
+}
+
+export function declinedSudoMessage(platform: NodeJS.Platform): string {
+  return platform === "win32"
+    ? "Rerun this setup from an elevated (Administrator) prompt."
+    : "Run `sudo tailscale set --operator=$(whoami)`, then re-run this setup.";
+}
+
+export function chownHint(platform: NodeJS.Platform, certPath: string, keyPath: string): string {
+  return platform === "win32"
+    ? `Couldn't change ownership of the cert files (${certPath}, ${keyPath}).`
+    : `Couldn't chown the cert files. Fix manually: sudo chown $(whoami) ${certPath} ${keyPath}`;
+}
+
+export const WINDOWS_MODE_NOTE = "Stored in your user profile; Windows file modes are not applied.";
+
+export function restrictCertFiles(platform: NodeJS.Platform, certPath: string, keyPath: string, chmod: typeof chmodSync = chmodSync): string | undefined {
+  if (platform === "win32") {
+    return WINDOWS_MODE_NOTE;
+  }
+  try {
+    chmod(certPath, 0o600);
+    chmod(keyPath, 0o600);
+  } catch (err) {
+    return `Couldn't chmod cert files (${(err as Error).message}).`;
+  }
+  return undefined;
+}
+
+export function confWrittenLine(platform: NodeJS.Platform, path: string): string {
+  return platform === "win32" ? `Wrote ${path}` : `Wrote ${path} (chmod 600)`;
+}
+
 async function confirm(label: string, defaultYes: boolean): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -53,7 +90,7 @@ async function confirm(label: string, defaultYes: boolean): Promise<boolean> {
   }
 }
 
-export async function runTailscaleSetup(env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function runTailscaleSetup(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Promise<void> {
   process.stdout.write(`\n  ${BOLD}hydra-ahp tailscale setup${RESET}\n`);
 
   header(1, "Checking Tailscale");
@@ -77,9 +114,10 @@ export async function runTailscaleSetup(env: NodeJS.ProcessEnv = process.env): P
     dnsName: status.dnsName,
     certPath,
     keyPath,
+    platform,
     confirmSudo: async () => {
       warn("tailscale cert needs elevated access to the local tailscaled socket.");
-      say("Fix this permanently: sudo tailscale set --operator=$(whoami)");
+      say(operatorHint(platform));
       return confirm("Retry cert generation with sudo now instead?", true);
     },
   });
@@ -87,19 +125,17 @@ export async function runTailscaleSetup(env: NodeJS.ProcessEnv = process.env): P
     fail(CERTS_UNAVAILABLE_MESSAGE);
   }
   if (minted.kind === "declined-sudo") {
-    fail("Run `sudo tailscale set --operator=$(whoami)`, then re-run this setup.");
+    fail(declinedSudoMessage(platform));
   }
   if (minted.kind === "error") {
     fail(minted.message);
   }
   if (minted.chownFailed) {
-    warn(`Couldn't chown the cert files. Fix manually: sudo chown $(whoami) ${certPath} ${keyPath}`);
+    warn(chownHint(platform, certPath, keyPath));
   }
-  try {
-    chmodSync(certPath, 0o600);
-    chmodSync(keyPath, 0o600);
-  } catch (err) {
-    warn(`Couldn't chmod cert files (${(err as Error).message}).`);
+  const modeNote = restrictCertFiles(platform, certPath, keyPath);
+  if (modeNote !== undefined) {
+    (platform === "win32" ? say : warn)(modeNote);
   }
   ok(`Wrote ${certPath}`);
   ok(`Wrote ${keyPath}`);
@@ -117,7 +153,7 @@ export async function runTailscaleSetup(env: NodeJS.ProcessEnv = process.env): P
     HYDRA_AHP_HOST: boundEverywhere ? undefined : status.ip,
     HYDRA_AHP_PREFERRED_HOST: status.dnsName,
   });
-  ok(`Wrote ${path} (chmod 600)`);
+  ok(confWrittenLine(platform, path));
   if (boundEverywhere) {
     say("HYDRA_AHP_HOST=0.0.0.0 left as-is: already reachable on the tailnet interface, and LAN clients keep working.");
   } else {
