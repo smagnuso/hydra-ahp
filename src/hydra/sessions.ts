@@ -15,6 +15,8 @@ export interface SessionListener {
   closed(): void;
   // Answers a permission request Hydra sent this client; throwing -32601 abstains.
   permission?(params: Json): Promise<unknown>;
+  // Answers an elicitation form Hydra sent this client; throwing -32601 abstains.
+  elicitation?(params: Json): Promise<unknown>;
 }
 
 export interface AttachOptions {
@@ -41,7 +43,7 @@ export interface QueueEditResult {
 }
 
 function abstain(): never {
-  throw new RpcError(ErrorCodes.MethodNotFound, "this client does not answer that permission request");
+  throw new RpcError(ErrorCodes.MethodNotFound, "this client does not answer that request");
 }
 
 // Routes the one /acp connection's per-session notifications to the bridge that attached each session.
@@ -86,6 +88,16 @@ export class HydraSessions {
     };
     peer.onRequest("session/request_permission", permission);
     peer.onRequest("hydra-acp/session/request_permission", permission);
+    // Same race as permissions: only a bridge that parks the form answers, anything else abstains.
+    peer.onRequest("elicitation/create", (raw) => {
+      const params = bag(raw);
+      const id = text(params.sessionId);
+      const listener = id ? this.listeners.get(id) : undefined;
+      if (!listener?.elicitation) {
+        abstain();
+      }
+      return listener.elicitation(params);
+    });
   }
 
   listen(hydraId: string, listener: SessionListener): () => void {

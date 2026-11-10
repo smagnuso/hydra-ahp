@@ -350,10 +350,12 @@ a fake agent, and never touch `~/.hydra-acp`.
 Experimental. Covers session listing, live transcripts, prompting, steering,
 queued messages, cancel, permissions, settings and model pickers, read and
 archive marks, several chats per session (forks and side chats), file reads and
-`@` completions, terminals, and session and uncommitted changesets. Out of
+`@` completions, terminals, session and uncommitted changesets, and form elicitation (an agent's structured
+questions, such as Claude's AskUserQuestion, arrive as `chat/inputRequested`
+and are answered with `chat/inputCompleted`; a form AHP cannot express is left
+to the other clients). Out of
 scope: per-turn and branch changesets, changeset review and operations,
-automations, customizations, file watches, elicitation (`chat/inputRequested`,
-which hydra has no counterpart for), moving chats between sessions, and creating
+automations, customizations, file watches, URL-mode elicitation, moving chats between sessions, and creating
 sessions on federated remotes (existing federated sessions are listed and
 driven).
 

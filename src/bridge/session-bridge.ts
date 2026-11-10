@@ -15,6 +15,7 @@ import { UnsupportedContent, chooseOption, confirmationOptions, imageSupport, is
 import { modelConfigOf, optionIdOf, optionOfModelKey, parseConfigOptions, type ConfigOption } from "./config.js";
 import { emptyChat, frameFromEntry, oldestSeq, reduceChat, turnsFromFrames } from "./replay.js";
 import { STATUS_IDLE, STATUS_IS_ARCHIVED, STATUS_IS_READ, summaryToSessionState, withFlagBits } from "./summary.js";
+import { actionOf, contentFrom, elicitationIdOf, planForm, type Field } from "./elicitation.js";
 import { FileLinks } from "./file-links.js";
 import { readLocalImage } from "./images.js";
 import { vscodeSessionLink } from "./session-links.js";
@@ -57,6 +58,14 @@ interface Parked {
   held?: NodeJS.Timeout;
 }
 
+interface ParkedForm {
+  turnId: string;
+  request: Json;
+  fields: Field[];
+  answer(result: unknown): void;
+  abstain(): void;
+}
+
 interface HeldSteer {
   id: string;
   message: Json;
@@ -71,6 +80,7 @@ type Pending =
   | { kind: "queue"; event: QueueEvent; params: Json }
   | { kind: "closed" }
   | { kind: "permission"; params: Json; resolve(result: unknown): void; reject(err: Error): void }
+  | { kind: "elicitation"; params: Json; resolve(result: unknown): void; reject(err: Error): void }
   | { kind: "settled"; entry: OwnEntry; result: unknown; error: Error | undefined };
 
 const ACCEPT: ActionDecision = { accept: true };
@@ -186,6 +196,7 @@ export class SessionBridge implements SessionListener {
   private readonly own = new Map<string, OwnEntry>();
   private readonly queuedEntries = new Map<string, OwnEntry>();
   private readonly parked = new Map<string, Parked>();
+  private readonly forms = new Map<string, ParkedForm>();
   private readonly settling = new Map<string, () => void>();
   // Resolved by another client with no verdict on the wire; the call's next update tells which way it went.
   private readonly unresolved = new Map<string, Parked>();
@@ -296,6 +307,12 @@ export class SessionBridge implements SessionListener {
     });
   }
 
+  elicitation(params: Json): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      this.deliver({ kind: "elicitation", params, resolve, reject });
+    });
+  }
+
   private deliver(event: Pending): void {
     if (this.buffering) {
       this.buffering.push(event);
@@ -402,7 +419,7 @@ export class SessionBridge implements SessionListener {
       this.unlisten = undefined;
       this.buffering = undefined;
       for (const event of pending) {
-        if (event.kind === "permission") {
+        if (event.kind === "permission" || event.kind === "elicitation") {
           event.reject(abstention());
         }
       }
@@ -440,7 +457,7 @@ export class SessionBridge implements SessionListener {
     const replayOpen = this.mapper.activeTurnId;
     this.buffering = undefined;
     for (const event of pending) {
-      if (event.kind !== "permission") {
+      if (event.kind !== "permission" && event.kind !== "elicitation") {
         this.handle(event, collect);
       }
     }
@@ -452,6 +469,8 @@ export class SessionBridge implements SessionListener {
     for (const event of pending) {
       if (event.kind === "permission") {
         this.park(event, collect, !viewer);
+      } else if (event.kind === "elicitation") {
+        this.parkForm(event, collect, !viewer);
       }
     }
 
@@ -565,6 +584,10 @@ export class SessionBridge implements SessionListener {
       this.park(event, sink);
       return;
     }
+    if (event.kind === "elicitation") {
+      this.parkForm(event, sink);
+      return;
+    }
     if (event.kind === "settled") {
       this.settled(event.entry, event.result, event.error, sink);
       return;
@@ -603,6 +626,10 @@ export class SessionBridge implements SessionListener {
     }
     if (kind === "permission_resolved") {
       this.permissionResolved(frame.update, sink);
+      return;
+    }
+    if (kind === "elicitation_resolved") {
+      this.formResolved(frame.update, sink);
       return;
     }
     if (kind === "session_info_update") {
@@ -975,6 +1002,10 @@ export class SessionBridge implements SessionListener {
         return this.cancelTurn(text(body.turnId) ?? "");
       case "chat/toolCallConfirmed":
         return this.confirm(body);
+      case "chat/inputAnswerChanged":
+        return this.forms.has(text(body.requestId) ?? "") ? ACCEPT : refuse("this input request is no longer open");
+      case "chat/inputCompleted":
+        return this.completeForm(body);
       case "chat/pendingMessageSet":
         return body.kind === "steering" ? this.setSteering(body, clientId) : this.setQueued(body, clientId);
       case "chat/pendingMessageRemoved":
@@ -1205,6 +1236,13 @@ export class SessionBridge implements SessionListener {
         answered.push(toolCallId);
       }
     }
+    for (const [id, form] of this.forms) {
+      if (form.turnId === turnId) {
+        this.forms.delete(id);
+        form.answer({ action: "cancel" });
+        this.publish([{ type: "chat/inputCompleted", requestId: id, response: "cancel" }]);
+      }
+    }
     this.publish(this.mapper.endLocal(turnId, Date.now()));
     // Accepted now so the client's turnCancelled lands before any turn that starts during the wait.
     this.followUp = (answered.length > 0 ? this.awaitAgent(answered) : Promise.resolve()).then(() => {
@@ -1248,6 +1286,33 @@ export class SessionBridge implements SessionListener {
     this.parked.delete(toolCallId);
     parked.answer(optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } });
     this.mapper.noteConfirmed(toolCallId);
+    this.syncInputNeeded();
+    return ACCEPT;
+  }
+
+  private completeForm(body: Json): ActionDecision {
+    const id = text(body.requestId) ?? "";
+    const form = this.forms.get(id);
+    if (!form) {
+      return refuse("this input request is no longer open");
+    }
+    const response = actionOf(body.response);
+    if (response !== "accept") {
+      this.forms.delete(id);
+      form.answer({ action: response });
+      this.syncInputNeeded();
+      return ACCEPT;
+    }
+    const part = this.chatState()?.activeTurn?.responseParts.find(
+      (candidate) => candidate.kind === "inputRequest" && candidate.request.id === id,
+    );
+    const drafts = part?.kind === "inputRequest" ? bag(part.request.answers) : {};
+    const result = contentFrom(form.fields, { ...drafts, ...bag(body.answers) });
+    if ("missing" in result) {
+      return refuse(`the question ${result.missing} needs an answer`);
+    }
+    this.forms.delete(id);
+    form.answer({ action: "accept", content: result.content });
     this.syncInputNeeded();
     return ACCEPT;
   }
@@ -1576,6 +1641,33 @@ export class SessionBridge implements SessionListener {
     }, delay);
   }
 
+  private parkForm(event: Extract<Pending, { kind: "elicitation" }>, sink: (actions: Json[]) => void, joining = false): void {
+    const id = elicitationIdOf(event.params);
+    const turnId = this.mapper.activeTurnId;
+    const asking = joining || (this.isLive && this.deps.core.hasSubscribers(this.deps.chatUri));
+    const plan = id ? planForm(event.params, id) : undefined;
+    // Abstaining leaves the form to the other clients; a cancel here would settle the race for all of them.
+    if (!id || !turnId || !asking || !plan) {
+      event.reject(abstention());
+      return;
+    }
+    this.forms.get(id)?.abstain();
+    this.forms.set(id, { turnId, request: plan.request, fields: plan.fields, answer: event.resolve, abstain: () => event.reject(abstention()) });
+    sink([{ type: "chat/inputRequested", request: plan.request }]);
+  }
+
+  // Another Hydra client answered first: close the AHP form the way their answer went.
+  private formResolved(update: Json, sink: (actions: Json[]) => void): void {
+    const id = elicitationIdOf(update) ?? text(update.elicitationId);
+    const form = id ? this.forms.get(id) : undefined;
+    if (!id || !form) {
+      return;
+    }
+    this.forms.delete(id);
+    form.abstain();
+    sink([{ type: "chat/inputCompleted", requestId: id, response: actionOf(update.action) }]);
+  }
+
   private dropParked(parked: Parked | undefined): void {
     if (!parked) {
       return;
@@ -1647,6 +1739,12 @@ export class SessionBridge implements SessionListener {
         parked.abstain();
       }
     }
+    for (const [id, form] of this.forms) {
+      if (form.turnId !== turnId) {
+        this.forms.delete(id);
+        form.abstain();
+      }
+    }
   }
 
   private abstainAll(): void {
@@ -1654,6 +1752,10 @@ export class SessionBridge implements SessionListener {
       this.dropParked(parked);
     }
     this.parked.clear();
+    for (const form of this.forms.values()) {
+      form.abstain();
+    }
+    this.forms.clear();
     this.syncInputNeeded();
   }
 
@@ -1700,6 +1802,13 @@ export class SessionBridge implements SessionListener {
         sessionUri,
         action({ type: "session/inputNeededSet", request: { id, chat: chatUri, kind: "toolConfirmation", turnId: parked.turnId, toolCall: call } }),
       );
+    }
+    for (const [requestId, form] of this.forms) {
+      const id = this.inputId(`form:${requestId}`);
+      if (stale.delete(id)) {
+        continue;
+      }
+      core.publish(sessionUri, action({ type: "session/inputNeededSet", request: { id, chat: chatUri, kind: "chatInput", request: form.request } }));
     }
     for (const id of stale) {
       core.publish(sessionUri, action({ type: "session/inputNeededRemoved", id }));

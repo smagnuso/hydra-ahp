@@ -320,3 +320,98 @@ describe("turn accounting around steering, cancels and agent-initiated turns", (
     ]);
   });
 });
+
+const FORM = {
+  sessionId: "h1",
+  mode: "form",
+  message: "Which stack?",
+  requestedSchema: {
+    type: "object",
+    properties: {
+      question_0: { type: "string", title: "Stack", oneOf: [{ const: "a", title: "Alpha" }, { const: "b", title: "Beta" }] },
+      question_0_custom: { type: "string", title: "Other" },
+    },
+    required: ["question_0"],
+  },
+  _meta: { "hydra-acp": { elicitationId: "e1" } },
+};
+
+describe("elicitation forms", () => {
+  let harness: BridgeHarness;
+
+  afterEach(async () => {
+    await harness.stop();
+  });
+
+  async function begin(): Promise<{ session: Session; oracle: ReducerOracle }> {
+    harness = await startBridgeHarness();
+    const session = await harness.connect();
+    await session.client.initialize({ clientId: "c-form", protocolVersions: ["0.9.0"], initialSubscriptions: [ROOT] });
+    const oracle = new ReducerOracle();
+    oracle.applySnapshot((await session.client.subscribe(SESSION)).result.snapshot as Snapshot);
+    oracle.applySnapshot((await session.client.subscribe(CHAT)).result.snapshot as Snapshot);
+    const { clientSeq } = session.client.dispatch(CHAT, act({ type: "chat/turnStarted", turnId: "t1", startedAt: new Date().toISOString(), message: { text: "go", origin: { kind: "user" } } }));
+    await session.waitFor((envelope) => envelope.origin?.clientSeq === clientSeq);
+    return { session, oracle };
+  }
+
+  function send(session: Session, action: Record<string, unknown>): Promise<ActionEnvelope> {
+    const { clientSeq } = session.client.dispatch(CHAT, act(action));
+    return session.waitFor((envelope) => envelope.origin?.clientSeq === clientSeq);
+  }
+
+  it("asks the form as an input request and answers Hydra with the folded content", async () => {
+    const { session } = await begin();
+    const answer = harness.hydra.listener!.elicitation!(FORM);
+    const asked = await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
+    expect(asked.action).toMatchObject({
+      request: {
+        id: "e1",
+        questions: [{ id: "question_0", kind: "single-select", message: "Which stack?", required: true, allowFreeformInput: true, options: [{ id: "a", label: "Alpha" }, { id: "b", label: "Beta" }] }],
+      },
+    });
+    const missing = await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: {} });
+    expect(missing.rejectionReason).toBeDefined();
+    const done = await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: { question_0: { state: "submitted", value: { kind: "selected", value: "b" } } } });
+    expect(done.rejectionReason).toBeUndefined();
+    expect(await answer).toEqual({ action: "accept", content: { question_0: "b" } });
+  });
+
+  it("sends free-form text to the custom field and a decline as a bare action", async () => {
+    const { session } = await begin();
+    const answer = harness.hydra.listener!.elicitation!(FORM);
+    await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
+    await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: { question_0: { state: "submitted", value: { kind: "selected", value: "", freeformValues: ["gamma"] } } } });
+    expect(await answer).toEqual({ action: "accept", content: { question_0_custom: "gamma" } });
+
+    const second = harness.hydra.listener!.elicitation!({ ...FORM, _meta: { "hydra-acp": { elicitationId: "e2" } } });
+    await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested" && (envelope.action as { request: { id: string } }).request.id === "e2");
+    await send(session, { type: "chat/inputCompleted", requestId: "e2", response: "decline" });
+    expect(await second).toEqual({ action: "decline" });
+  });
+
+  it("closes the form and abstains when another client answers first", async () => {
+    const { session } = await begin();
+    const answer = harness.hydra.listener!.elicitation!(FORM);
+    await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
+    harness.hydra.listener!.update({ update: { sessionUpdate: "elicitation_resolved", elicitationId: "e1", action: "accept" } });
+    await expect(answer).rejects.toMatchObject({ code: -32601 });
+    const closed = await session.waitFor((envelope) => envelope.action.type === "chat/inputCompleted");
+    expect(closed.action).toMatchObject({ requestId: "e1", response: "accept" });
+  });
+
+  it("abstains from a form AHP cannot express", async () => {
+    const { session } = await begin();
+    const odd = { ...FORM, requestedSchema: { type: "object", properties: { x: { type: "object" } } } };
+    await expect(harness.hydra.listener!.elicitation!(odd)).rejects.toMatchObject({ code: -32601 });
+    expect(session.events.some((envelope) => envelope.action.type === "chat/inputRequested")).toBe(false);
+  });
+
+  it("answers a pending form cancelled when the turn is cancelled", async () => {
+    const { session } = await begin();
+    const answer = harness.hydra.listener!.elicitation!(FORM);
+    await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
+    await send(session, { type: "chat/turnCancelled", turnId: "t1", duration: 1 });
+    expect(await answer).toEqual({ action: "cancel" });
+  });
+});
