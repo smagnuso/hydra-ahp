@@ -372,7 +372,9 @@ describe("elicitation forms", () => {
     });
     const missing = await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: {} });
     expect(missing.rejectionReason).toBeDefined();
-    const done = await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: { question_0: { state: "submitted", value: { kind: "selected", value: "b" } } } });
+    const again = await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested" && (envelope.action as { request: { id: string } }).request.id === "e1~1");
+    expect((again.action as { request: { message: string } }).request.message).toContain("question_0");
+    const done = await send(session, { type: "chat/inputCompleted", requestId: "e1~1", response: "accept", answers: { question_0: { state: "submitted", value: { kind: "selected", value: "b" } } } });
     expect(done.rejectionReason).toBeUndefined();
     expect(await answer).toEqual({ action: "accept", content: { question_0: "b" } });
   });
@@ -417,8 +419,20 @@ describe("elicitation forms", () => {
     await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
     const bad = await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: { n: { state: "submitted", value: { kind: "number", value: 2 } } } });
     expect(bad.rejectionReason).toBeDefined();
-    await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: { n: { state: "submitted", value: { kind: "number", value: 7 } } } });
+    const again = await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested" && (envelope.action as { request: { id: string } }).request.id === "e1~1");
+    expect(again.action).toMatchObject({ request: { id: "e1~1", message: expect.stringContaining("at least 5"), answers: { n: { state: "draft", value: { kind: "number", value: 2 } } } } });
+    const closed = await session.waitFor((envelope) => envelope.action.type === "chat/inputCompleted" && (envelope.action as { response: string }).response === "cancel");
+    expect(closed.action).toMatchObject({ requestId: "e1" });
+    await send(session, { type: "chat/inputCompleted", requestId: "e1~1", response: "accept", answers: { n: { state: "submitted", value: { kind: "number", value: 7 } } } });
     expect(await answer).toEqual({ action: "accept", content: { n: 7 } });
+  });
+
+  it("offers free-form input only where the form has a custom slot", async () => {
+    const { session } = await begin();
+    const multi = { ...FORM, requestedSchema: { type: "object", properties: { m: { type: "array", items: { enum: ["a", "b"] } } } } };
+    void harness.hydra.listener!.elicitation!(multi).catch(() => undefined);
+    const asked = await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
+    expect(asked.action).toMatchObject({ request: { questions: [{ kind: "multi-select", allowFreeformInput: false }] } });
   });
 
   it("abstains from a form AHP cannot express", async () => {

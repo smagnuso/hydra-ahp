@@ -60,6 +60,10 @@ interface Parked {
 
 interface ParkedForm {
   turnId: string;
+  // The AHP request currently showing; a refused answer replaces it with a fresh one.
+  elicitationId: string;
+  requestId: string;
+  revision: number;
   request: Json;
   fields: Field[];
   answer(result: unknown): void;
@@ -1003,7 +1007,7 @@ export class SessionBridge implements SessionListener {
       case "chat/toolCallConfirmed":
         return this.confirm(body);
       case "chat/inputAnswerChanged":
-        return this.forms.has(text(body.requestId) ?? "") ? ACCEPT : refuse("this input request is no longer open");
+        return this.formByRequest(text(body.requestId) ?? "") ? ACCEPT : refuse("this input request is no longer open");
       case "chat/inputCompleted":
         return this.completeForm(body);
       case "chat/pendingMessageSet":
@@ -1240,7 +1244,7 @@ export class SessionBridge implements SessionListener {
       if (form.turnId === turnId) {
         this.forms.delete(id);
         form.answer({ action: "cancel" });
-        this.publish([{ type: "chat/inputCompleted", requestId: id, response: "cancel" }]);
+        this.publish([{ type: "chat/inputCompleted", requestId: form.requestId, response: "cancel" }]);
       }
     }
     this.publish(this.mapper.endLocal(turnId, Date.now()));
@@ -1291,11 +1295,11 @@ export class SessionBridge implements SessionListener {
   }
 
   private completeForm(body: Json): ActionDecision {
-    const id = text(body.requestId) ?? "";
-    const form = this.forms.get(id);
+    const form = this.formByRequest(text(body.requestId) ?? "");
     if (!form) {
       return refuse("this input request is no longer open");
     }
+    const id = form.elicitationId;
     const response = actionOf(body.response);
     if (response !== "accept") {
       this.forms.delete(id);
@@ -1304,20 +1308,60 @@ export class SessionBridge implements SessionListener {
       return ACCEPT;
     }
     const part = this.chatState()?.activeTurn?.responseParts.find(
-      (candidate) => candidate.kind === "inputRequest" && candidate.request.id === id,
+      (candidate) => candidate.kind === "inputRequest" && candidate.request.id === form.requestId,
     );
     const drafts = part?.kind === "inputRequest" ? bag(part.request.answers) : {};
-    const result = contentFrom(form.fields, { ...drafts, ...bag(body.answers) });
+    const answers = { ...drafts, ...bag(body.answers) };
+    const result = contentFrom(form.fields, answers);
     if ("missing" in result) {
+      this.represent(form, answers, `The question ${result.missing} needs an answer.`);
       return refuse(`the question ${result.missing} needs an answer`);
     }
     if ("invalid" in result) {
+      this.represent(form, answers, `Please fix: ${result.invalid}.`);
       return refuse(`the answer is not valid: ${result.invalid}`);
     }
     this.forms.delete(id);
     form.answer({ action: "accept", content: result.content });
     this.syncInputNeeded();
     return ACCEPT;
+  }
+
+  // The client shows a refused submit as answered and offers no retry, so the form is asked again, drafts kept and the problem named.
+  private represent(form: ParkedForm, answers: Json, problem: string): void {
+    const previous = form.requestId;
+    const drafts: Json = {};
+    for (const [key, value] of Object.entries(answers)) {
+      const answer = bag(value);
+      if (answer.state === "skipped") {
+        drafts[key] = answer;
+      } else if (answer.value !== undefined) {
+        drafts[key] = { ...answer, state: "draft" };
+      }
+    }
+    setTimeout(() => {
+      if (this.forms.get(form.elicitationId) !== form || form.requestId !== previous) {
+        return;
+      }
+      form.revision += 1;
+      form.requestId = `${form.elicitationId}~${form.revision}`;
+      form.request = { ...form.request, id: form.requestId, message: problem, ...(Object.keys(drafts).length > 0 ? { answers: drafts } : {}) };
+      this.publish([
+        { type: "chat/inputCompleted", requestId: previous, response: "cancel" },
+        { type: "chat/inputRequested", request: form.request },
+      ]);
+      const { core, chatUri, sessionUri } = this.deps;
+      core.publish(sessionUri, action({ type: "session/inputNeededSet", request: { id: this.inputId(`form:${form.elicitationId}`), chat: chatUri, kind: "chatInput", request: form.request } }));
+    }, 0);
+  }
+
+  private formByRequest(requestId: string): ParkedForm | undefined {
+    for (const form of this.forms.values()) {
+      if (form.requestId === requestId) {
+        return form;
+      }
+    }
+    return undefined;
   }
 
   private async setQueued(body: Json, clientId?: string): Promise<ActionDecision> {
@@ -1655,7 +1699,7 @@ export class SessionBridge implements SessionListener {
       return;
     }
     this.forms.get(id)?.abstain();
-    this.forms.set(id, { turnId, request: plan.request, fields: plan.fields, answer: event.resolve, abstain: () => event.reject(abstention()) });
+    this.forms.set(id, { turnId, elicitationId: id, requestId: id, revision: 0, request: plan.request, fields: plan.fields, answer: event.resolve, abstain: () => event.reject(abstention()) });
     sink([{ type: "chat/inputRequested", request: plan.request }]);
   }
 
@@ -1668,7 +1712,7 @@ export class SessionBridge implements SessionListener {
     }
     this.forms.delete(id);
     form.abstain();
-    sink([{ type: "chat/inputCompleted", requestId: id, response: actionOf(update.action) }]);
+    sink([{ type: "chat/inputCompleted", requestId: form.requestId, response: actionOf(update.action) }]);
   }
 
   private dropParked(parked: Parked | undefined): void {
@@ -1806,8 +1850,8 @@ export class SessionBridge implements SessionListener {
         action({ type: "session/inputNeededSet", request: { id, chat: chatUri, kind: "toolConfirmation", turnId: parked.turnId, toolCall: call } }),
       );
     }
-    for (const [requestId, form] of this.forms) {
-      const id = this.inputId(`form:${requestId}`);
+    for (const [elicitationId, form] of this.forms) {
+      const id = this.inputId(`form:${elicitationId}`);
       if (stale.delete(id)) {
         continue;
       }

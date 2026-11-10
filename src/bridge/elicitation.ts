@@ -138,7 +138,7 @@ export function planForm(params: Json, requestId: string): FormPlan | undefined 
         ...base,
         kind: "multi-select",
         options: options.map((option) => (preset.has(option.id) ? { ...option, recommended: true } : option)),
-        ...(customKey ? { allowFreeformInput: true } : {}),
+        allowFreeformInput: customKey !== undefined,
         ...(min !== undefined ? { min } : {}),
         ...(max !== undefined ? { max } : {}),
       });
@@ -150,7 +150,7 @@ export function planForm(params: Json, requestId: string): FormPlan | undefined 
           ...base,
           kind: "single-select",
           options: options.map((option) => (option.id === prop.default ? { ...option, recommended: true } : option)),
-          ...(customKey ? { allowFreeformInput: true } : {}),
+          allowFreeformInput: customKey !== undefined,
         });
         fields.push(field("single-select", options.map((option) => option.id as string)));
       } else {
