@@ -63,6 +63,15 @@ async function settleUntilMirrored(session: Session, oracle: ReducerOracle, harn
   }
 }
 
+// For a state the bridge reaches on its own schedule (text it holds back until the agent pauses, a re-attach that
+// has to round-trip the host). A fixed sleep is too short on a slow runner and wasteful on a fast one.
+async function waitUntil(check: () => boolean, ms = 5000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check() && Date.now() < deadline) {
+    await sleep(10);
+  }
+}
+
 describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
   let harness: BridgeHarness;
 
@@ -289,8 +298,11 @@ describe.each(["0.9.0", "1.0.0"])("session bridge at %s", (version) => {
     };
     harness.hydra.meta = { busy: true, turnStartedAt: 1_800_000_000_001 };
     harness.hydra.rows = [ROW({ status: "warm" })];
-    await sleep(300);
-    settle(session, oracle);
+    await waitUntil(() => {
+      const held = (harness.core.store.state(CHAT) as ChatState | undefined)?.activeTurn;
+      return held?.id === "again" && JSON.stringify(held).includes('"content":"hi"');
+    });
+    await settleUntilMirrored(session, oracle, harness);
     const chat = oracle.state(CHAT) as ChatState;
     expect(chat.turns).toHaveLength(4);
     expect(chat.activeTurn?.id).toBe("again");
