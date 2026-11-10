@@ -1345,7 +1345,7 @@ export class SessionBridge implements SessionListener {
       }
       form.revision += 1;
       form.requestId = `${form.elicitationId}~${form.revision}`;
-      form.request = { ...form.request, id: form.requestId, message: problem, ...(Object.keys(drafts).length > 0 ? { answers: drafts } : {}) };
+      form.request = { ...form.request, id: form.requestId, message: problem, questions: prefill(form.request.questions, drafts), ...(Object.keys(drafts).length > 0 ? { answers: drafts } : {}) };
       this.publish([
         { type: "chat/inputCompleted", requestId: previous, response: "cancel" },
         { type: "chat/inputRequested", request: form.request },
@@ -1902,6 +1902,22 @@ export class SessionBridge implements SessionListener {
     const next = page.hasMore && oldest !== undefined ? String(oldest) : undefined;
     core.publish(chatUri, action({ type: "chat/turnsLoaded", turns, ...(next !== undefined ? { turnsNextCursor: next } : {}) }));
   }
+}
+
+// VS Code reads a question's default (and an option's recommended flag), not the request's answers, so the previous answers go there.
+function prefill(questions: unknown, drafts: Json): Json[] {
+  return (Array.isArray(questions) ? questions : []).map((entry) => {
+    const question = bag(entry);
+    const value = bag(bag(drafts[text(question.id) ?? ""]).value);
+    const picked = Array.isArray(value.value) ? value.value : typeof value.value === "string" ? [value.value] : undefined;
+    if (Array.isArray(question.options) && picked) {
+      return { ...question, options: question.options.map((option) => ({ ...bag(option), recommended: picked.includes(bag(option).id) })) };
+    }
+    if (!Array.isArray(question.options) && value.value !== undefined) {
+      return { ...question, defaultValue: value.value };
+    }
+    return question;
+  });
 }
 
 function stampLatestTurn(actions: Json[], model: string | undefined, config?: Record<string, string>): void {

@@ -427,6 +427,35 @@ describe("elicitation forms", () => {
     expect(await answer).toEqual({ action: "accept", content: { n: 7 } });
   });
 
+  it("prefills the re-asked form from the previous answers", async () => {
+    const { session } = await begin();
+    const form = {
+      ...FORM,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          s: { type: "string", default: "a", oneOf: [{ const: "a", title: "A" }, { const: "b", title: "B" }] },
+          m: { type: "array", items: { enum: ["x", "y"] } },
+          t: { type: "string", minLength: 3 },
+        },
+        required: ["s"],
+      },
+    };
+    void harness.hydra.listener!.elicitation!(form).catch(() => undefined);
+    await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
+    const answers = {
+      s: { state: "submitted", value: { kind: "selected", value: "b" } },
+      m: { state: "submitted", value: { kind: "selected-many", value: ["y"] } },
+      t: { state: "submitted", value: { kind: "text", value: "ab" } },
+    };
+    await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers });
+    const again = await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested" && (envelope.action as { request: { id: string } }).request.id === "e1~1");
+    const questions = (again.action as unknown as { request: { questions: Array<Record<string, unknown>> } }).request.questions;
+    expect((questions[0]!.options as Array<{ recommended: boolean }>).map((o) => o.recommended)).toEqual([false, true]);
+    expect((questions[1]!.options as Array<{ recommended: boolean }>).map((o) => o.recommended)).toEqual([false, true]);
+    expect(questions[2]).toMatchObject({ defaultValue: "ab" });
+  });
+
   it("offers free-form input only where the form has a custom slot", async () => {
     const { session } = await begin();
     const multi = { ...FORM, requestedSchema: { type: "object", properties: { m: { type: "array", items: { enum: ["a", "b"] } } } } };
