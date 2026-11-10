@@ -1311,6 +1311,9 @@ export class SessionBridge implements SessionListener {
     if ("missing" in result) {
       return refuse(`the question ${result.missing} needs an answer`);
     }
+    if ("invalid" in result) {
+      return refuse(`the answer is not valid: ${result.invalid}`);
+    }
     this.forms.delete(id);
     form.answer({ action: "accept", content: result.content });
     this.syncInputNeeded();

@@ -10,6 +10,7 @@ export interface Field {
   // The sibling text field that carries free-form input for a select, when the agent offered one.
   customKey?: string;
   required: boolean;
+  limits: Json;
 }
 
 export interface FormPlan {
@@ -105,10 +106,23 @@ export function planForm(params: Json, requestId: string): FormPlan | undefined 
       message: str(prop.description) ?? (standalone.length === 1 ? message : undefined) ?? title ?? key,
       ...(required.has(key) || (customKey && required.has(customKey)) ? { required: true } : {}),
     };
+    const limits: Json = {};
+    for (const name of ["minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems"]) {
+      if (num(prop[name]) !== undefined) {
+        limits[name] = prop[name];
+      }
+    }
+    if (str(prop.pattern)) {
+      limits.pattern = prop.pattern;
+    }
+    if (str(prop.format)) {
+      limits.format = prop.format;
+    }
     const field = (kind: Kind, optionIds: string[] = []): Field => ({
       key,
       kind,
       optionIds,
+      limits,
       ...(customKey ? { customKey } : {}),
       required: required.has(key) || (customKey !== undefined && required.has(customKey)),
     });
@@ -119,10 +133,11 @@ export function planForm(params: Json, requestId: string): FormPlan | undefined 
       }
       const min = num(prop.minItems);
       const max = num(prop.maxItems);
+      const preset = new Set(Array.isArray(prop.default) ? prop.default : []);
       questions.push({
         ...base,
         kind: "multi-select",
-        options,
+        options: options.map((option) => (preset.has(option.id) ? { ...option, recommended: true } : option)),
         ...(customKey ? { allowFreeformInput: true } : {}),
         ...(min !== undefined ? { min } : {}),
         ...(max !== undefined ? { max } : {}),
@@ -131,7 +146,12 @@ export function planForm(params: Json, requestId: string): FormPlan | undefined 
     } else if (prop.type === "string") {
       const options = stringOptions(prop);
       if (options) {
-        questions.push({ ...base, kind: "single-select", options, ...(customKey ? { allowFreeformInput: true } : {}) });
+        questions.push({
+          ...base,
+          kind: "single-select",
+          options: options.map((option) => (option.id === prop.default ? { ...option, recommended: true } : option)),
+          ...(customKey ? { allowFreeformInput: true } : {}),
+        });
         fields.push(field("single-select", options.map((option) => option.id as string)));
       } else {
         const min = num(prop.minLength);
@@ -177,7 +197,7 @@ export function elicitationIdOf(params: Json): string | undefined {
 type Content = Record<string, string | number | boolean | string[]>;
 
 // Folds AHP answers back into the ACP form content; a string is the name of a required field left unanswered.
-export function contentFrom(fields: Field[], answers: Json): { content: Content } | { missing: string } {
+export function contentFrom(fields: Field[], answers: Json): { content: Content } | { missing: string } | { invalid: string } {
   const content: Content = {};
   for (const field of fields) {
     const answer = bag(answers[field.key]);
@@ -208,7 +228,85 @@ export function contentFrom(fields: Field[], answers: Json): { content: Content 
       return { missing: field.key };
     }
   }
+  for (const field of fields) {
+    const problem = violation(field, content[field.key]);
+    if (problem) {
+      return { invalid: `${field.key} ${problem}` };
+    }
+  }
   return { content };
+}
+
+const MAX_PATTERN = 256;
+const MAX_CHECKED = 10000;
+
+function formatOk(format: string, value: string): boolean {
+  if (format === "email") {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  }
+  if (format === "uri") {
+    return /^[a-zA-Z][a-zA-Z0-9+.-]*:\S+$/.test(value);
+  }
+  if (format === "date") {
+    const when = new Date(`${value}T00:00:00Z`);
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(when.getTime()) && when.toISOString().startsWith(value);
+  }
+  if (format === "date-time") {
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(value) && !Number.isNaN(Date.parse(value));
+  }
+  return true;
+}
+
+function violation(field: Field, value: string | number | boolean | string[] | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const { limits } = field;
+  if (typeof value === "string" && field.kind === "text") {
+    const { minLength, maxLength, pattern, format } = limits;
+    if (typeof minLength === "number" && value.length < minLength) {
+      return `needs at least ${minLength} characters`;
+    }
+    if (typeof maxLength === "number" && value.length > maxLength) {
+      return `allows at most ${maxLength} characters`;
+    }
+    if (typeof format === "string" && value.length <= MAX_CHECKED && !formatOk(format, value)) {
+      return `is not a valid ${format}`;
+    }
+    if (typeof pattern === "string" && pattern.length <= MAX_PATTERN && value.length <= MAX_CHECKED) {
+      let re: RegExp | undefined;
+      try {
+        re = new RegExp(pattern);
+      } catch {
+        re = undefined;
+      }
+      if (re && !re.test(value)) {
+        return "does not match the required pattern";
+      }
+    }
+  }
+  if (typeof value === "number") {
+    const { minimum, maximum } = limits;
+    if (field.kind === "integer" && !Number.isInteger(value)) {
+      return "must be a whole number";
+    }
+    if (typeof minimum === "number" && value < minimum) {
+      return `must be at least ${minimum}`;
+    }
+    if (typeof maximum === "number" && value > maximum) {
+      return `must be at most ${maximum}`;
+    }
+  }
+  if (Array.isArray(value)) {
+    const { minItems, maxItems } = limits;
+    if (typeof minItems === "number" && value.length < minItems) {
+      return `needs at least ${minItems} selections`;
+    }
+    if (typeof maxItems === "number" && value.length > maxItems) {
+      return `allows at most ${maxItems} selections`;
+    }
+  }
+  return undefined;
 }
 
 export function actionOf(response: unknown): "accept" | "decline" | "cancel" {

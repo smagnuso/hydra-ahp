@@ -400,6 +400,27 @@ describe("elicitation forms", () => {
     expect(closed.action).toMatchObject({ requestId: "e1", response: "accept" });
   });
 
+  it("closes the form on a daemon cancel with no resolver", async () => {
+    const { session } = await begin();
+    const answer = harness.hydra.listener!.elicitation!(FORM);
+    await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
+    harness.hydra.listener!.update({ update: { sessionUpdate: "elicitation_resolved", elicitationId: "e1", action: "cancel" } });
+    await expect(answer).rejects.toMatchObject({ code: -32601 });
+    const closed = await session.waitFor((envelope) => envelope.action.type === "chat/inputCompleted");
+    expect(closed.action).toMatchObject({ requestId: "e1", response: "cancel" });
+  });
+
+  it("refuses an accept that breaks a field limit", async () => {
+    const { session } = await begin();
+    const form = { ...FORM, requestedSchema: { type: "object", properties: { n: { type: "integer", minimum: 5 } } } };
+    const answer = harness.hydra.listener!.elicitation!(form);
+    await session.waitFor((envelope) => envelope.action.type === "chat/inputRequested");
+    const bad = await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: { n: { state: "submitted", value: { kind: "number", value: 2 } } } });
+    expect(bad.rejectionReason).toBeDefined();
+    await send(session, { type: "chat/inputCompleted", requestId: "e1", response: "accept", answers: { n: { state: "submitted", value: { kind: "number", value: 7 } } } });
+    expect(await answer).toEqual({ action: "accept", content: { n: 7 } });
+  });
+
   it("abstains from a form AHP cannot express", async () => {
     const { session } = await begin();
     const odd = { ...FORM, requestedSchema: { type: "object", properties: { x: { type: "object" } } } };
