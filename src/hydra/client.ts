@@ -50,7 +50,7 @@ export class HydraClient {
     const client = new HydraClient(ws);
     await client.request("initialize", {
       protocolVersion: 1,
-      clientCapabilities: {},
+      clientCapabilities: { elicitation: { form: {} } },
       clientInfo: options.clientInfo,
     });
     return client;
