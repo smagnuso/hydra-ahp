@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { readFile, stat } from "node:fs/promises";
 import type { Changeset, ChangesetFile, ChangesetState } from "@microsoft/agent-host-protocol";
 import { cwdToUri } from "../bridge/ids.js";
@@ -17,6 +17,11 @@ const EDIT_SCHEME = "ahp-changeset:";
 const CHANGESET_URI = /\/changeset\/(session|uncommitted|turn\/[^/]+)$/;
 const REVISION = /^(HEAD|[0-9a-f]{40}|[0-9a-f]{64})$/;
 const POLL_MS = 2_000;
+// While nothing is happening in the session only a hand edit or a commit can change the tree, and the file-watch
+// nudge below catches the first of those, so the poll is just a backstop for the rest.
+const IDLE_POLL_MS = 30_000;
+// A nudge refreshes soon rather than at once, so a burst of file events costs one git run.
+const NUDGE_DELAY_MS = 300;
 // A changeset that keeps failing, such as a turn of a chat nobody has open, is retried less and less often.
 const MAX_BACKOFF_MS = 60_000;
 // Hydra walks a session's history to list its edits, so new ones are picked up less often than the tree is checked.
@@ -78,7 +83,10 @@ export interface ChangesetServiceOptions {
   onSessionTotals?: (sessionUri: string, totals: { additions: number; deletions: number; files: number }) => void;
   // Receives directories outside the session cwd that contain recorded edits.
   onWorkdirs?: (sessionUri: string, directories: string[]) => void;
+  // Whether the session is mid-turn. It sets the cadence: fast while the agent is working, slow otherwise.
+  isBusy?: (sessionUri: string) => boolean;
   pollMs?: number;
+  idlePollMs?: number;
   editsEveryMs?: number;
 }
 
@@ -108,6 +116,10 @@ interface Watched {
   edited: Map<string, SessionEdit>;
   editsReadAt: number;
   failures: number;
+  // A nudge arrived while a refresh was running, so another is due once it finishes.
+  dirty: boolean;
+  // Set while a nudge has pulled the next refresh forward.
+  nudged: boolean;
 }
 
 interface CachedEditContent {
@@ -124,6 +136,7 @@ export class ChangesetService {
   private readonly snapshots = new Map<string, ChangesetFile[]>();
   private readonly revisionContents = new Map<string, Buffer>();
   private readonly editContents = new Map<string, CachedEditContent>();
+  private readonly lastBusy = new Map<string, boolean>();
   private revisionContentBytes = 0;
   private editContentBytes = 0;
 
@@ -162,6 +175,8 @@ export class ChangesetService {
       edited: new Map(),
       editsReadAt: 0,
       failures: 0,
+      dirty: false,
+      nudged: false,
     };
     this.watched.set(uri, watched);
     this.core.createChannel(uri, {
@@ -310,9 +325,79 @@ export class ChangesetService {
     }
     if (!watched.stopped) {
       const every = this.options.pollMs ?? POLL_MS;
-      const delay = watched.failures === 0 ? every : Math.min(every * 2 ** watched.failures, Math.max(MAX_BACKOFF_MS, every));
-      watched.timer = setTimeout(() => void this.refresh(uri, watched), delay);
-      watched.timer.unref();
+      const idle = Math.max(every, this.options.idlePollMs ?? IDLE_POLL_MS);
+      const settled = this.options.isBusy?.(watched.sessionUri) === false ? idle : every;
+      const delay = watched.dirty
+        ? NUDGE_DELAY_MS
+        : watched.failures === 0
+          ? settled
+          : Math.min(settled * 2 ** watched.failures, Math.max(MAX_BACKOFF_MS, settled));
+      watched.dirty = false;
+      this.schedule(uri, watched, delay);
+    }
+  }
+
+  private schedule(uri: string, watched: Watched, delay: number): void {
+    clearTimeout(watched.timer);
+    watched.timer = setTimeout(() => {
+      watched.nudged = false;
+      void this.refresh(uri, watched);
+    }, delay);
+    watched.timer.unref();
+  }
+
+  // Pulls a session's next refresh forward. `edits` also forces a re-read of the recorded edits, which are
+  // otherwise throttled and which a turn boundary has just changed.
+  nudge(sessionUri: string, edits = false): void {
+    for (const [uri, watched] of this.watched) {
+      if (watched.sessionUri !== sessionUri || watched.stopped) {
+        continue;
+      }
+      if (edits) {
+        watched.editsReadAt = 0;
+      }
+      if (watched.computing) {
+        watched.dirty = true;
+      } else if (!watched.nudged) {
+        watched.nudged = true;
+        this.schedule(uri, watched, NUDGE_DELAY_MS);
+      }
+    }
+  }
+
+  // Called when a file under `path` changed. Only sessions whose directory contains it are nudged.
+  nudgePath(path: string): void {
+    const sessions = new Set([...this.watched.values()].map((watched) => watched.sessionUri));
+    for (const sessionUri of sessions) {
+      const cwd = this.options.cwdOf(sessionUri);
+      if (cwd === undefined) {
+        continue;
+      }
+      const inside = relative(cwd, path);
+      if (inside === "" || (!inside.startsWith("..") && !isAbsolute(inside))) {
+        this.nudge(sessionUri);
+      }
+    }
+  }
+
+  // A turn starting or ending moves the session to the other cadence, and the end is when its edits settle.
+  checkBusy(): void {
+    if (this.options.isBusy === undefined) {
+      return;
+    }
+    const sessions = new Set([...this.watched.values()].map((watched) => watched.sessionUri));
+    for (const known of [...this.lastBusy.keys()]) {
+      if (!sessions.has(known)) {
+        this.lastBusy.delete(known);
+      }
+    }
+    for (const sessionUri of sessions) {
+      const busy = this.options.isBusy(sessionUri);
+      const before = this.lastBusy.get(sessionUri);
+      this.lastBusy.set(sessionUri, busy);
+      if (before !== undefined && before !== busy) {
+        this.nudge(sessionUri, true);
+      }
     }
   }
 

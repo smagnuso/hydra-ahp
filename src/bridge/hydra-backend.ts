@@ -129,7 +129,9 @@ export class HydraBackend implements Backend {
     this.files = options.files;
     this.terminals = options.terminals;
     this.changesets = options.changesets;
-    this.watches = options.watches ?? new ResourceWatchService({ files: options.files });
+    this.watches =
+      options.watches ??
+      new ResourceWatchService({ files: options.files, ...(options.changesets ? { onActivity: (path) => options.changesets?.nudgePath(path) } : {}) });
     this.permissionDelayMs = options.permissionDelayMs ?? 0;
     this.attachments = options.attachments;
     this.serverInfo = { name: "hydra-ahp", version: options.version };
@@ -141,6 +143,7 @@ export class HydraBackend implements Backend {
     this.changesets?.start(core);
     this.watches.start(core);
     this.catalog.onChange(() => this.onCatalogChange());
+    this.catalog.onChange(() => this.changesets?.checkBusy());
     this.catalog.onFlagChanged((hydraId, flag, value) => this.bridges.get(hydraId)?.showFlag(flag, value));
     this.catalog.onDirectoryChanged((uri, directory) => {
       for (const [hydraId, bridge] of this.bridges) {

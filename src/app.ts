@@ -104,6 +104,7 @@ export async function startApp(initial: Config, version: string): Promise<App> {
   const changesets = new ChangesetService({
     cwdOf: (uri) => catalog.localCwdOf(uri),
     isCold: (uri) => catalog.isCold(uri),
+    isBusy: (uri) => catalog.isBusy(uri),
     membersOf: (uri) => catalog.membersOf(uri),
     sessionEdits: (id) => rest.sessionDiff(id),
     turnEdits: (uri, turnId): TurnFileEdit[] | undefined => backend.turnEdits(uri, turnId),

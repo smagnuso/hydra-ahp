@@ -34,6 +34,9 @@ export interface ResourceWatchServiceOptions {
   debounceMs?: number;
   graceMs?: number;
   maxDirectories?: number;
+  // Told of each (non-excluded) change under a watched tree, so other services can refresh when something moves
+  // instead of polling. Only trees a client asked to watch are covered.
+  onActivity?: (path: string) => void;
 }
 
 interface Running {
@@ -282,6 +285,7 @@ export class ResourceWatchService {
     if (path !== run.root && run.excluded(relativePath)) {
       return;
     }
+    this.options.onActivity?.(path);
     run.pending.add(path);
     clearTimeout(run.timer);
     run.timer = setTimeout(() => {

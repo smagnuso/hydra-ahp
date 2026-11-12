@@ -248,6 +248,11 @@ export class Catalog {
     return lead && this.isLocal(lead) ? this.entries.get(lead)?.cwd : undefined;
   }
 
+  // Whether any chat of the session is mid-turn.
+  isBusy(sessionUri: string): boolean {
+    return this.membersOf(sessionUri).some((id) => this.entries.get(id)?.busy === true);
+  }
+
   isCold(sessionUri: string): boolean {
     const members = this.membersOf(sessionUri);
     return members.length === 0 || members.every((id) => this.entries.get(id)?.status === "cold");
