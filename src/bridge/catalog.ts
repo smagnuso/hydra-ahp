@@ -4,6 +4,7 @@ import { ROOT_URI } from "../protocol/channels.js";
 import type { ProtocolCore } from "../protocol/core.js";
 import type { ExtensionState } from "../hydra/ext-state.js";
 import type { HydraAgent, HydraRest, HydraSessionEntry, SessionPage } from "../hydra/rest.js";
+import { runSessionStream } from "../hydra/session-stream.js";
 import { logger } from "../util/log.js";
 import type { FileSession } from "../files/service.js";
 import { chatKey, cwdToUri, defaultChatUri, isChatUri, isFederatedId, providerSessionUri, sessionOfDefaultChat, sessionUri } from "./ids.js";
@@ -15,6 +16,9 @@ import { modelBoundOf, toConfigState, toModelConfigSchema, type ConfigOption } f
 import { groupToSummary, type GroupMember } from "./summary.js";
 
 const log = logger("catalog");
+
+// With the stream up, the full poll runs on every Nth tick (about 30 s at the default interval).
+const STREAM_BACKSTOP_POLLS = 6;
 
 export const AHP_URI_KEY = "ahpUri";
 export const AHP_CHAT_KEY = "ahpChat";
@@ -34,6 +38,9 @@ export interface CatalogOptions {
   pollMs?: number;
   warmPollMs?: number;
   agentsEveryPolls?: number;
+  // Opens the daemon's session stream. Absent, or against a daemon without
+  // one, the polls below do all the work as before.
+  openStream?: (since: number | undefined, signal: AbortSignal) => Promise<Response>;
   // List sessions copied in from another machine; off by default, they are usually the bulk of the list.
   showImported?: boolean;
   // Advertise each local session's uncommitted changes; the backend must serve them.
@@ -90,6 +97,9 @@ export class Catalog {
   private readonly directoryListeners = new Set<(uri: string, directory: string | undefined) => void>();
   private cursor: number | undefined;
   private polls = 0;
+  private streamAbort: AbortController | undefined;
+  private streamHealthy = false;
+  private frameQueue: Promise<void> = Promise.resolve();
   private rawAgents: HydraAgent[] = [];
   private sessionDefaults: Record<string, Record<string, string>> = {};
   private agentList: AgentInfo[] = [];
@@ -114,18 +124,87 @@ export class Catalog {
     core.createChannel(ROOT_URI, root);
     await this.poll();
     this.ready = true;
+    let backstopTicks = 0;
     this.pollTimer = setInterval(() => {
+      // With the stream up the full poll only backstops it, and is the one
+      // thing that notices a peer session disappearing.
+      if (this.streamHealthy && ++backstopTicks % STREAM_BACKSTOP_POLLS !== 0) {
+        return;
+      }
       void this.poll().catch((err) => log.warn("poll failed", err instanceof Error ? err.message : err));
     }, this.options.pollMs ?? 5000);
     this.warmTimer = setInterval(() => {
+      if (this.streamHealthy) {
+        return;
+      }
       void this.pollWarm().catch((err) => log.warn("warm poll failed", err instanceof Error ? err.message : err));
     }, this.options.warmPollMs ?? 1500);
     this.pollTimer.unref();
     this.warmTimer.unref();
+    this.startStream();
+  }
+
+  // Pushes from the daemon's session stream, which never moves the poll's
+  // cursor: a frame is an accelerator, and the backstop poll still owns what
+  // has been seen.
+  private startStream(): void {
+    const open = this.options.openStream;
+    if (open === undefined) {
+      return;
+    }
+    const abort = new AbortController();
+    this.streamAbort = abort;
+    void runSessionStream({
+      open,
+      signal: abort.signal,
+      ...(this.cursor !== undefined ? { initialCursor: this.cursor } : {}),
+      onFrame: (frame) => {
+        this.streamHealthy = true;
+        this.queueFrame(frame);
+      },
+      onDisconnect: () => {
+        this.streamHealthy = false;
+      },
+    }).then((outcome) => {
+      if (outcome === "unsupported") {
+        this.streamHealthy = false;
+      }
+    });
+  }
+
+  // Frames and polls both write the entry map and reconcile, and a poll
+  // awaits in the middle; wait for it rather than interleave.
+  private queueFrame(frame: SessionPage): void {
+    this.frameQueue = this.frameQueue
+      .then(async () => {
+        while ((this.polling || this.warmPolling) && !this.stopped) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        if (this.stopped) {
+          return;
+        }
+        await this.applyFrame(frame);
+      })
+      .catch((err) => log.warn("stream frame failed", err instanceof Error ? err.message : err));
+  }
+
+  // A frame is a delta: rows replace by id (a session that cooled arrives as
+  // its cold row) and `removed` drops. Unlike a list page it says nothing
+  // about the rows it leaves out, so nothing is marked cold by omission.
+  private async applyFrame(frame: SessionPage): Promise<void> {
+    for (const row of frame.sessions) {
+      this.setEntry(row);
+    }
+    for (const id of frame.removed ?? []) {
+      this.drop(id);
+    }
+    await this.lookUpStamps();
+    this.reconcile();
   }
 
   stop(): void {
     this.stopped = true;
+    this.streamAbort?.abort();
     clearInterval(this.pollTimer);
     clearInterval(this.warmTimer);
   }

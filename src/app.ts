@@ -96,6 +96,7 @@ export async function startApp(initial: Config, version: string): Promise<App> {
     ...(config.warmPollMs !== undefined ? { warmPollMs: config.warmPollMs } : {}),
     showImported: config.showImported,
     changesets: true,
+    openStream: (since, signal) => rest.streamSessions(since, signal),
   });
   const sessions = new HydraSessions(client, { name: "hydra-ahp", version });
   const files = new FileService({ sessions: catalog, dirRoots: config.dirRoots });

@@ -127,6 +127,19 @@ export class HydraRest {
     return this.request("GET", `/v1/sessions${suffix}`);
   }
 
+  // Opens GET /v1/sessions/stream. Returns the raw response, whatever its
+  // status, so the caller can tell an older daemon (404) from a failure.
+  streamSessions(since: number | undefined, signal: AbortSignal): Promise<Response> {
+    const params = new URLSearchParams({ includeNonInteractive: "1" });
+    if (since !== undefined) {
+      params.set("since", String(since));
+    }
+    return fetch(`${this.baseUrl}/v1/sessions/stream?${params}`, {
+      headers: { Authorization: `Bearer ${this.token}`, Accept: "text/event-stream" },
+      signal,
+    });
+  }
+
   getSession(id: string): Promise<HydraSessionEntry> {
     return this.request("GET", `/v1/sessions/${encodeURIComponent(id)}`);
   }
